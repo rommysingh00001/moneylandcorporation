@@ -1,423 +1,2784 @@
-from pathlib import Path
-import shutil, textwrap, os
-
-root = Path("/mnt/data/moneyland-portal-v1")
-if root.exists():
-    shutil.rmtree(root)
-(root/"public"/"admin").mkdir(parents=True)
-(root/"data").mkdir()
-(root/"uploads").mkdir()
-
-# ---------------- package.json ----------------
-(root/"package.json").write_text(r'''{
-  "name": "moneyland-portal",
-  "version": "1.0.0",
-  "private": true,
-  "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
-  },
-  "dependencies": {
-    "express": "^4.21.2",
-    "multer": "^1.4.5-lts.1",
-    "express-session": "^1.18.1"
-  }
-}
-''', encoding="utf-8")
-
-(root/".env.example").write_text(r'''PORT=3000
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=CHANGE_THIS_PASSWORD
-SESSION_SECRET=CHANGE_THIS_TO_A_LONG_RANDOM_SECRET
-''', encoding="utf-8")
-
-# ---------------- seed db json ----------------
-(root/"data/properties.json").write_text("[]", encoding="utf-8")
-
-# ---------------- server ----------------
-(root/"server.js").write_text(r'''const express = require("express");
-const session = require("express-session");
-const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
-const crypto = require("crypto");
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-const ROOT = __dirname;
-const PUBLIC = path.join(ROOT, "public");
-const DATA_DIR = path.join(ROOT, "data");
-const UPLOADS = path.join(ROOT, "uploads");
-const DB_FILE = path.join(DATA_DIR, "properties.json");
-
-for (const dir of [DATA_DIR, UPLOADS]) fs.mkdirSync(dir, {recursive:true});
-if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, "[]");
-
-app.use(express.json());
-app.use(express.urlencoded({extended:true}));
-app.use(session({
-  secret: process.env.SESSION_SECRET || "development-only-change-me",
-  resave: false,
-  saveUninitialized: false,
-  cookie: {httpOnly:true, sameSite:"lax", secure:false, maxAge: 8*60*60*1000}
-}));
-app.use("/uploads", express.static(UPLOADS));
-app.use(express.static(PUBLIC));
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOADS),
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, `${Date.now()}-${crypto.randomBytes(5).toString("hex")}${ext}`);
-  }
-});
-const upload = multer({
-  storage,
-  limits: {files:10, fileSize:8*1024*1024},
-  fileFilter: (_req,file,cb) => {
-    const ok = ["image/jpeg","image/png","image/webp"].includes(file.mimetype);
-    cb(ok ? null : new Error("Only JPG, PNG and WEBP images are allowed."), ok);
-  }
-});
-
-function readProperties(){
-  return JSON.parse(fs.readFileSync(DB_FILE,"utf8"));
-}
-function writeProperties(items){
-  fs.writeFileSync(DB_FILE, JSON.stringify(items,null,2));
-}
-function adminOnly(req,res,next){
-  if (!req.session.admin) return res.status(401).json({message:"Admin login required."});
-  next();
-}
-function clean(v){ return String(v ?? "").trim(); }
-
-app.get("/", (_req,res)=>res.sendFile(path.join(PUBLIC,"index.html")));
-app.get("/admin", (_req,res)=>res.sendFile(path.join(PUBLIC,"admin","index.html")));
-
-app.post("/api/admin/login", (req,res)=>{
-  const username = clean(req.body.username);
-  const password = clean(req.body.password);
-  const expectedUser = process.env.ADMIN_USERNAME || "admin";
-  const expectedPass = process.env.ADMIN_PASSWORD || "admin123";
-
-  if(username === expectedUser && password === expectedPass){
-    req.session.admin = true;
-    return res.json({ok:true});
-  }
-  return res.status(401).json({message:"Invalid admin credentials."});
-});
-
-app.post("/api/admin/logout", (req,res)=>{
-  req.session.destroy(()=>res.json({ok:true}));
-});
-
-app.get("/api/admin/me", (req,res)=>res.json({admin:!!req.session.admin}));
-
-// Public listing API: only published properties are returned.
-app.get("/api/properties", (req,res)=>{
-  let items = readProperties().filter(p=>p.status==="published");
-
-  const type = clean(req.query.type).toLowerCase();
-  const city = clean(req.query.city).toLowerCase();
-  const q = clean(req.query.q).toLowerCase();
-
-  if(type && type !== "all") items = items.filter(p=>p.dealType.toLowerCase()===type);
-  if(city) items = items.filter(p=>(p.city+" "+p.location).toLowerCase().includes(city));
-  if(q) items = items.filter(p=>
-    [p.title,p.city,p.location,p.description,p.propertyType].join(" ").toLowerCase().includes(q)
-  );
-
-  items.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
-  res.json(items);
-});
-
-app.get("/api/properties/:id", (req,res)=>{
-  const item = readProperties().find(p=>p.id===req.params.id && p.status==="published");
-  if(!item) return res.status(404).json({message:"Property not found."});
-  res.json(item);
-});
-
-// Admin APIs
-app.get("/api/admin/properties", adminOnly, (_req,res)=>{
-  const items = readProperties().sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
-  res.json(items);
-});
-
-app.post("/api/admin/properties", adminOnly, upload.array("images",10), (req,res)=>{
-  const body = req.body;
-  const dealTypes = ["Fresh Booking","Resale","Rental"];
-  if(!dealTypes.includes(clean(body.dealType)))
-    return res.status(400).json({message:"Choose Fresh Booking, Resale or Rental."});
-  if(!clean(body.title) || !clean(body.city) || !clean(body.price))
-    return res.status(400).json({message:"Title, city and price are required."});
-
-  const properties = readProperties();
-  const id = "ML" + Date.now().toString(36).toUpperCase();
-
-  const property = {
-    id,
-    title: clean(body.title),
-    dealType: clean(body.dealType),
-    propertyType: clean(body.propertyType) || "Residential",
-    city: clean(body.city),
-    location: clean(body.location),
-    price: clean(body.price),
-    area: clean(body.area),
-    bhk: clean(body.bhk),
-    bathrooms: clean(body.bathrooms),
-    possession: clean(body.possession),
-    description: clean(body.description),
-    status: body.status === "draft" ? "draft" : "published",
-    createdAt: new Date().toISOString(),
-    images: (req.files || []).map((f,i)=>({
-      url: `/uploads/${f.filename}`,
-      order:i+1,
-      originalName:f.originalname
-    }))
-  };
-
-  properties.push(property);
-  writeProperties(properties);
-  res.json({ok:true, property});
-});
-
-app.put("/api/admin/properties/:id/status", adminOnly, (req,res)=>{
-  const allowed = ["published","draft","sold","rented"];
-  const status = clean(req.body.status);
-  if(!allowed.includes(status)) return res.status(400).json({message:"Invalid status."});
-
-  const properties = readProperties();
-  const item = properties.find(p=>p.id===req.params.id);
-  if(!item) return res.status(404).json({message:"Property not found."});
-  item.status = status;
-  item.updatedAt = new Date().toISOString();
-  writeProperties(properties);
-  res.json({ok:true,property:item});
-});
-
-app.delete("/api/admin/properties/:id", adminOnly, (req,res)=>{
-  const properties = readProperties();
-  const index = properties.findIndex(p=>p.id===req.params.id);
-  if(index===-1) return res.status(404).json({message:"Property not found."});
-  const [removed] = properties.splice(index,1);
-  for(const img of removed.images || []){
-    const file = path.join(UPLOADS,path.basename(img.url));
-    if(fs.existsSync(file)) fs.unlinkSync(file);
-  }
-  writeProperties(properties);
-  res.json({ok:true});
-});
-
-app.use((err,_req,res,_next)=>{
-  console.error(err);
-  res.status(400).json({message:err.message || "Something went wrong."});
-});
-
-app.listen(PORT,()=>console.log(`MONEYLAND running: http://localhost:${PORT}`));
-''', encoding="utf-8")
-
-# ---------------- public index ----------------
-(root/"public/index.html").write_text(r'''<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MONEYLAND | Property</title>
-<style>
-:root{--purple:#9d35e9;--pink:#c050ff;--bg:#09090b;--card:#111115;--line:#29242e;--muted:#99939f}
-*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:#f8f5fa;font-family:Inter,system-ui,Arial,sans-serif}
-a{text-decoration:none;color:inherit}.container{width:min(1180px,92%);margin:auto}
-header{height:72px;border-bottom:1px solid #211d25;background:#09090cf2;backdrop-filter:blur(15px);position:sticky;top:0;z-index:50}
-.nav{height:100%;display:flex;align-items:center;justify-content:space-between}.logo{font-weight:900;font-size:21px;letter-spacing:-.8px;display:flex;align-items:center;gap:9px}.diamond{width:21px;height:21px;background:linear-gradient(135deg,#7122c7,#d258ff);transform:rotate(45deg);clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}
-nav{display:flex;gap:27px;align-items:center}nav a{font-size:12px;color:#b8b1bd}nav a:hover{color:#fff}.navbtn{padding:9px 14px;border:1px solid #64367b;border-radius:7px;color:#fff!important;background:#17101b}
-.hero{min-height:560px;display:grid;align-items:center;text-align:center;background:radial-gradient(600px 300px at 80% 25%,#8621ba30,transparent 70%),radial-gradient(500px 260px at 15% 50%,#4a187030,transparent 70%)}
-.eyebrow{color:#c053ff;font-size:11px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase}.hero h1{font-size:clamp(42px,6vw,72px);line-height:1;letter-spacing:-3px;max-width:850px;margin:16px auto}.hero h1 span{color:#bd4bff}.hero p{color:#aaa3ae;max-width:650px;margin:0 auto 28px;line-height:1.6;font-size:15px}
-.deal-picker{display:flex;justify-content:center;gap:8px;flex-wrap:wrap}.deal-picker button{padding:12px 20px;border:1px solid #45364c;background:#141117;color:#c8c1cc;border-radius:7px;cursor:pointer;font-weight:700}.deal-picker button.active,.deal-picker button:hover{background:#9633df;color:#fff;border-color:#b34cff}
-.search{margin:35px auto 0;display:flex;gap:8px;max-width:780px}.search input{flex:1;height:43px;border:1px solid #39313f;background:#121116;color:#fff;border-radius:7px;padding:0 14px}.search button{border:0;border-radius:7px;background:#9b35e5;color:#fff;padding:0 22px;font-weight:800}
-section{padding:70px 0}.section-title{text-align:center;margin-bottom:30px}.section-title h2{font-size:27px;margin:0 0 8px}.section-title p{color:var(--muted);font-size:12px}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:15px}.card{border:1px solid var(--line);background:var(--card);border-radius:9px;overflow:hidden}.pic{height:210px;background:#27252a;position:relative}.pic img{width:100%;height:100%;object-fit:cover}.badge{position:absolute;top:10px;left:10px;background:#9130dd;padding:5px 7px;border-radius:4px;font-size:9px;font-weight:800}.body{padding:13px}.body h3{font-size:14px;margin:0 0 6px}.muted{color:#9d97a3;font-size:10px}.price{font-size:17px;font-weight:900;margin:10px 0 5px}.empty{text-align:center;color:#88818c;border:1px dashed #302a34;padding:40px;border-radius:8px;grid-column:1/-1}
-.info{background:#0e0d10;border-top:1px solid #1e1b21;border-bottom:1px solid #1e1b21}.columns{display:grid;grid-template-columns:repeat(3,1fr);gap:35px}.columns h3{font-size:15px}.columns p{color:#9c96a1;font-size:12px;line-height:1.7}.team{display:grid;grid-template-columns:repeat(3,1fr);gap:15px}.person{background:#111014;border:1px solid #29242e;padding:25px;border-radius:9px}.person strong{display:block;margin-bottom:5px}.person small{color:#a39ca9}
-footer{padding:30px 0;border-top:1px solid #211d25;color:#85808a;font-size:10px}footer .container{display:flex;justify-content:space-between}
-@media(max-width:800px){nav{display:none}.cards,.columns,.team{grid-template-columns:1fr}.search{flex-direction:column}.search button{height:43px}.hero{min-height:610px}}
-</style>
-</head>
-<body>
-<header><div class="container nav">
-  <a class="logo" href="#"><i class="diamond"></i>MONEYLAND</a>
-  <nav>
-    <a href="#properties">Properties</a><a href="#about">About</a><a href="#team">Team</a><a href="#careers">Careers</a><a href="#contact">Contact</a>
-    <a class="navbtn" href="/admin">Admin Portal</a>
-  </nav>
-</div></header>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<main>
+    <title>MONEYLAND CORPORATION | Gurgaon Real Estate</title>
+
+    <meta
+        name="description"
+        content="MONEYLAND CORPORATION - Fresh Booking, Resale Deals and Rental Properties in Gurgaon."
+    >
+
+    <style>
+
+        /* =========================================================
+           MONEYLAND CORPORATION
+           MAIN WEBSITE - INDEX.HTML
+           Theme: Black / Purple / White
+           ========================================================= */
+
+        :root {
+            --black: #050507;
+            --black2: #09090d;
+            --card: #0e0d13;
+            --card2: #121019;
+
+            --purple: #a83cff;
+            --purple2: #7d21d5;
+            --purple3: #c263ff;
+
+            --white: #ffffff;
+            --text: #f4f0f8;
+            --muted: #a39cab;
+
+            --border: rgba(177, 67, 255, 0.38);
+            --border-light: rgba(255,255,255,0.10);
+
+            --container: 1180px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            background: var(--black);
+            color: var(--text);
+            font-family:
+                Inter,
+                -apple-system,
+                BlinkMacSystemFont,
+                "Segoe UI",
+                Arial,
+                sans-serif;
+
+            overflow-x: hidden;
+        }
+
+        a {
+            text-decoration: none;
+            color: inherit;
+        }
+
+        button,
+        input,
+        select {
+            font-family: inherit;
+        }
+
+        .container {
+            width: min(var(--container), 92%);
+            margin: auto;
+        }
+
+
+        /* =========================================================
+           HEADER
+           ========================================================= */
+
+        header {
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+
+            height: 70px;
+
+            background: rgba(5, 5, 7, 0.94);
+            backdrop-filter: blur(18px);
+
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+
+        .navbar {
+            height: 70px;
+
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+
+        /* LOGO
+           Later Admin Panel se actual logo upload/connect hoga.
+        */
+
+        .logo-placeholder {
+            width: 205px;
+            height: 45px;
+
+            display: flex;
+            align-items: center;
+
+            color: white;
+
+            font-size: 24px;
+            font-weight: 900;
+            letter-spacing: -1px;
+        }
+
+        .logo-placeholder span {
+            color: var(--purple3);
+        }
+
+        .logo-sub {
+            position: absolute;
+
+            margin-top: 27px;
+            margin-left: 36px;
+
+            font-size: 7px;
+            letter-spacing: 4px;
+            font-weight: 600;
+
+            color: #aaa;
+        }
+
+
+        /* NAVIGATION */
+
+        .nav-links {
+            display: flex;
+            align-items: center;
+            gap: 28px;
+        }
+
+        .nav-links a {
+            position: relative;
+
+            color: #d0cad5;
+
+            font-size: 13px;
+            font-weight: 500;
+
+            transition: 0.25s;
+        }
+
+        .nav-links a:hover {
+            color: white;
+        }
+
+        .nav-links a:first-child {
+            color: var(--purple3);
+        }
+
+        .nav-links a:first-child::after {
+            content: "";
+
+            position: absolute;
+
+            left: 0;
+            right: 0;
+            bottom: -25px;
+
+            height: 2px;
+
+            background: var(--purple);
+        }
+
+
+        /* WHATSAPP BUTTON */
+
+        .nav-whatsapp {
+            padding: 10px 16px;
+
+            border: 1px solid var(--purple);
+
+            border-radius: 8px;
+
+            color: white !important;
+
+            background: rgba(155, 42, 240, 0.08);
+
+            transition: 0.25s;
+        }
+
+        .nav-whatsapp:hover {
+            background: var(--purple);
+            box-shadow: 0 0 25px rgba(168,60,255,0.35);
+        }
+
+
+        /* =========================================================
+           HERO
+           ========================================================= */
+
+        .hero {
+            min-height: 540px;
+
+            display: flex;
+            align-items: center;
+
+            position: relative;
+
+            overflow: hidden;
+
+            background:
+                radial-gradient(
+                    circle at 75% 35%,
+                    rgba(134, 31, 205, 0.22),
+                    transparent 32%
+                ),
+                radial-gradient(
+                    circle at 15% 50%,
+                    rgba(103, 27, 160, 0.13),
+                    transparent 30%
+                );
+        }
+
+
+        /* FUTURE HERO IMAGE AREA
+
+           Admin panel se future mein hero image upload hogi.
+
+           Filhaal intentionally BLACK.
+        */
+
+        .hero-image-placeholder {
+            position: absolute;
+
+            right: 0;
+            top: 0;
+
+            width: 52%;
+            height: 100%;
+
+            background: #050507;
+
+            opacity: 0.95;
+
+            z-index: 0;
+        }
+
+
+        /* Purple glow */
+
+        .hero-image-placeholder::after {
+            content: "";
+
+            position: absolute;
+
+            inset: 0;
+
+            background:
+                radial-gradient(
+                    circle at center,
+                    rgba(160, 43, 255, 0.22),
+                    transparent 60%
+                );
+        }
+
+
+        .hero-content {
+            position: relative;
+            z-index: 2;
+
+            width: 100%;
+
+            padding: 75px 0;
+        }
+
+        .eyebrow {
+            color: var(--purple3);
+
+            font-size: 12px;
+            font-weight: 700;
+
+            letter-spacing: 3px;
+
+            text-transform: uppercase;
+
+            margin-bottom: 18px;
+        }
+
+        .hero h1 {
+            max-width: 690px;
+
+            font-size: clamp(46px, 6vw, 74px);
+
+            line-height: 0.98;
+
+            letter-spacing: -3px;
+
+            font-weight: 850;
+
+            margin-bottom: 24px;
+        }
+
+        .hero h1 span {
+            color: var(--purple3);
+        }
+
+        .hero-description {
+            font-size: 17px;
+
+            color: #c0b9c6;
+
+            margin-bottom: 30px;
+        }
+
+
+        /* =========================================================
+           SEARCH
+           ========================================================= */
+
+        .search-box {
+            width: 100%;
+            max-width: 930px;
+
+            display: flex;
+            align-items: stretch;
+
+            padding: 6px;
+
+            border: 1px solid rgba(190, 82, 255, 0.65);
+
+            border-radius: 10px;
+
+            background: rgba(9, 8, 13, 0.95);
+
+            box-shadow:
+                0 0 35px rgba(139, 32, 210, 0.10);
+        }
+
+        .search-main {
+            flex: 1;
+
+            display: flex;
+            align-items: center;
+
+            padding: 0 15px;
+
+            border-right: 1px solid rgba(255,255,255,0.10);
+        }
+
+        .search-icon {
+            font-size: 20px;
+            margin-right: 12px;
+            color: #aaa;
+        }
+
+        .search-main input {
+            width: 100%;
+
+            height: 46px;
+
+            border: none;
+            outline: none;
+
+            background: transparent;
+
+            color: white;
+
+            font-size: 13px;
+        }
+
+        .search-main input::placeholder {
+            color: #77717e;
+        }
+
+        .filter {
+            min-width: 125px;
+
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+
+            padding: 0 15px;
+
+            border-right: 1px solid rgba(255,255,255,0.10);
+        }
+
+        .filter small {
+            color: #8f8994;
+            font-size: 9px;
+        }
+
+        .filter select {
+            border: none;
+            outline: none;
+
+            background: transparent;
+
+            color: white;
+
+            font-size: 12px;
+
+            cursor: pointer;
+        }
+
+        .filter select option {
+            background: #111;
+        }
+
+        .search-btn {
+            border: none;
+
+            background: linear-gradient(
+                135deg,
+                #a338ed,
+                #7b20d1
+            );
+
+            color: white;
+
+            padding: 0 28px;
+
+            border-radius: 7px;
+
+            font-size: 13px;
+
+            font-weight: 800;
+
+            cursor: pointer;
+
+            transition: 0.25s;
+        }
+
+        .search-btn:hover {
+            box-shadow: 0 0 25px rgba(168,60,255,0.4);
+            transform: translateY(-1px);
+        }
+
+
+        /* =========================================================
+           DEAL TYPES
+           ========================================================= */
+
+        .deal-types {
+            padding: 40px 0 70px;
+
+            background: var(--black);
+        }
+
+        .deal-grid {
+            display: grid;
+
+            grid-template-columns:
+                repeat(3, 1fr);
+
+            gap: 18px;
+        }
+
+        .deal-card {
+            min-height: 130px;
+
+            position: relative;
+
+            display: flex;
+            align-items: center;
+
+            padding: 24px;
+
+            border: 1px solid var(--border);
+
+            border-radius: 9px;
+
+            background:
+                linear-gradient(
+                    145deg,
+                    rgba(40,18,57,0.55),
+                    rgba(10,9,14,0.95)
+                );
+
+            transition: 0.3s;
+
+            cursor: pointer;
+        }
+
+        .deal-card:hover {
+            transform: translateY(-4px);
+
+            border-color: var(--purple3);
+
+            box-shadow:
+                0 10px 35px rgba(143,37,211,0.14);
+        }
+
+        .deal-icon {
+            width: 58px;
+            height: 58px;
+
+            flex-shrink: 0;
+
+            display: flex;
+            align-items: center;
+            justify-content: center;
+
+            margin-right: 18px;
+
+            border-radius: 50%;
+
+            color: var(--purple3);
+
+            font-size: 25px;
+
+            background:
+                radial-gradient(
+                    circle,
+                    rgba(172,65,255,0.28),
+                    rgba(83,24,121,0.15)
+                );
+
+            border: 1px solid rgba(190,76,255,0.4);
+        }
+
+        .deal-card h3 {
+            font-size: 17px;
+
+            margin-bottom: 7px;
+        }
+
+        .deal-card p {
+            color: var(--muted);
+
+            font-size: 11px;
+
+            line-height: 1.5;
+
+            max-width: 190px;
+        }
+
+        .deal-arrow {
+            position: absolute;
+
+            right: 18px;
+
+            width: 34px;
+            height: 34px;
+
+            display: flex;
+            align-items: center;
+            justify-content: center;
+
+            border: 1px solid var(--purple);
+
+            border-radius: 50%;
+
+            color: var(--purple3);
+        }
+
+
+        /* =========================================================
+           SECTION COMMON
+           ========================================================= */
+
+        section {
+            padding: 80px 0;
+        }
+
+        .section-label {
+            color: var(--purple3);
+
+            font-size: 10px;
+
+            letter-spacing: 3px;
+
+            text-transform: uppercase;
+
+            margin-bottom: 10px;
+        }
+
+        .section-heading {
+            display: flex;
+            align-items: end;
+            justify-content: space-between;
+
+            margin-bottom: 30px;
+        }
+
+        .section-heading h2 {
+            font-size: 30px;
+
+            letter-spacing: -1px;
+        }
+
+        .section-heading p {
+            color: var(--muted);
+
+            font-size: 12px;
+        }
+
+        .view-all {
+            color: var(--purple3);
+
+            font-size: 12px;
+        }
+
+
+        /* =========================================================
+           PROPERTY CARDS
+           ========================================================= */
+
+        .property-grid {
+            display: grid;
+
+            grid-template-columns:
+                repeat(3, 1fr);
+
+            gap: 20px;
+        }
+
+        .property-card {
+            overflow: hidden;
+
+            background: var(--card);
+
+            border: 1px solid var(--border-light);
+
+            border-radius: 9px;
+
+            transition: 0.3s;
+        }
+
+        .property-card:hover {
+            transform: translateY(-5px);
+
+            border-color: var(--border);
+
+            box-shadow:
+                0 15px 45px rgba(118,26,180,0.16);
+        }
+
+
+        /*
+            PROPERTY IMAGE
+
+            IMPORTANT:
+            Black intentionally.
+
+            Later:
+            Admin Panel
+            ↓
+            Upload property images
+            ↓
+            Database
+            ↓
+            This area automatically gets image.
+        */
+
+        .property-image {
+            height: 220px;
+
+            position: relative;
+
+            background: #000;
+        }
+
+        .property-image img {
+            width: 100%;
+            height: 100%;
+
+            object-fit: cover;
+
+            display: none;
+        }
+
+        .property-badge {
+            position: absolute;
+
+            left: 12px;
+            top: 12px;
+
+            padding: 6px 9px;
+
+            border-radius: 4px;
+
+            background: var(--purple);
+
+            color: white;
+
+            font-size: 9px;
+
+            font-weight: 800;
+        }
+
+        .property-content {
+            padding: 16px;
+        }
+
+        .property-title {
+            font-size: 15px;
+
+            font-weight: 750;
+
+            margin-bottom: 6px;
+        }
+
+        .property-location {
+            color: var(--muted);
+
+            font-size: 11px;
+        }
+
+        .property-price {
+            margin: 14px 0 9px;
+
+            font-size: 19px;
+
+            font-weight: 850;
+        }
+
+        .property-info {
+            display: flex;
+
+            gap: 12px;
+
+            color: #9c95a3;
+
+            font-size: 10px;
+        }
+
+
+        /* =========================================================
+           TRUST SECTION
+           ========================================================= */
+
+        .trust-section {
+            border-top: 1px solid rgba(255,255,255,0.07);
+            border-bottom: 1px solid rgba(255,255,255,0.07);
+
+            background: #08080b;
+        }
+
+        .trust-grid {
+            display: grid;
+
+            grid-template-columns: 1.1fr 1fr 1fr 1fr;
+
+            gap: 30px;
+
+            align-items: center;
+        }
+
+        .trust-intro h2 {
+            font-size: 30px;
+
+            line-height: 1.1;
+
+            margin-bottom: 8px;
+        }
+
+        .trust-intro h2 span {
+            color: var(--purple3);
+        }
+
+        .trust-item {
+            padding-left: 20px;
+
+            border-left: 1px solid rgba(255,255,255,0.12);
+        }
+
+        .trust-icon {
+            width: 50px;
+            height: 50px;
+
+            display: flex;
+            align-items: center;
+            justify-content: center;
+
+            margin-bottom: 14px;
+
+            border-radius: 50%;
+
+            border: 1px solid var(--purple);
+
+            color: var(--purple3);
+
+            background: rgba(141,42,207,0.12);
+
+            font-size: 21px;
+        }
+
+        .trust-item h3 {
+            font-size: 14px;
+
+            margin-bottom: 8px;
+        }
+
+        .trust-item p {
+            color: var(--muted);
+
+            font-size: 11px;
+
+            line-height: 1.6;
+        }
+
+
+        /* =========================================================
+           ABOUT
+           ========================================================= */
+
+        .about-section {
+            position: relative;
+
+            overflow: hidden;
+        }
+
+        /*
+            Future ABOUT IMAGE AREA
+            Currently black.
+        */
+
+        .about-image-placeholder {
+            position: absolute;
+
+            left: 0;
+            top: 0;
+
+            width: 42%;
+            height: 100%;
+
+            background: #050507;
+
+            opacity: 0.85;
+        }
+
+        .about-grid {
+            position: relative;
+            z-index: 2;
+
+            display: grid;
+
+            grid-template-columns:
+                1.3fr 0.8fr 0.9fr;
+
+            gap: 30px;
+        }
+
+        .about-main {
+            padding-right: 40px;
+        }
+
+        .about-main h2 {
+            font-size: 31px;
+
+            line-height: 1.1;
+
+            margin-bottom: 18px;
+        }
+
+        .about-main h2 span {
+            color: var(--purple3);
+        }
+
+        .about-main p {
+            color: #aaa2b0;
+
+            font-size: 12px;
+
+            line-height: 1.8;
+
+            max-width: 550px;
+        }
+
+        .outline-btn {
+            display: inline-flex;
+
+            margin-top: 24px;
+
+            padding: 10px 18px;
+
+            border: 1px solid var(--purple);
+
+            border-radius: 7px;
+
+            color: white;
+
+            font-size: 11px;
+
+            transition: 0.25s;
+        }
+
+        .outline-btn:hover {
+            background: var(--purple);
+        }
+
+        .mini-column {
+            padding-left: 25px;
+
+            border-left: 1px solid rgba(255,255,255,0.13);
+        }
+
+        .mini-column h3 {
+            font-size: 16px;
+
+            margin-bottom: 12px;
+        }
+
+        .mini-column p {
+            color: var(--muted);
+
+            font-size: 11px;
+
+            line-height: 1.7;
+
+            margin-bottom: 18px;
+        }
+
+
+        /* =========================================================
+           CONTACT
+           ========================================================= */
+
+        .contact-section {
+            border-top: 1px solid rgba(255,255,255,0.08);
+
+            background: #09080d;
+        }
+
+        .contact-grid {
+            display: grid;
+
+            grid-template-columns:
+                0.9fr 1.1fr;
+
+            gap: 50px;
+        }
+
+        .contact-left h2 {
+            font-size: 34px;
+
+            margin-bottom: 12px;
+        }
+
+        .contact-left h2 span {
+            color: var(--purple3);
+        }
+
+        .contact-left p {
+            color: var(--muted);
+
+            font-size: 12px;
+
+            line-height: 1.8;
+        }
+
+        .contact-details {
+            margin-top: 25px;
+        }
+
+        .contact-item {
+            display: flex;
+
+            gap: 15px;
+
+            margin-bottom: 18px;
+        }
+
+        .contact-item-icon {
+            width: 38px;
+            height: 38px;
+
+            flex-shrink: 0;
+
+            display: flex;
+            align-items: center;
+            justify-content: center;
+
+            border: 1px solid var(--purple);
+
+            border-radius: 50%;
+
+            color: var(--purple3);
+        }
+
+        .contact-item small {
+            display: block;
+
+            color: #807986;
+
+            font-size: 9px;
+
+            margin-bottom: 3px;
+        }
+
+        .contact-item strong {
+            font-size: 12px;
+
+            font-weight: 600;
+        }
+
+        .contact-form {
+            padding: 28px;
+
+            background: var(--card);
+
+            border: 1px solid var(--border);
+
+            border-radius: 9px;
+        }
+
+        .contact-form h3 {
+            margin-bottom: 20px;
+        }
+
+        .form-row {
+            display: grid;
+
+            grid-template-columns: 1fr 1fr;
+
+            gap: 12px;
+        }
+
+        .contact-form input,
+        .contact-form textarea {
+            width: 100%;
+
+            padding: 13px;
+
+            margin-bottom: 12px;
+
+            background: #08080b;
+
+            border: 1px solid rgba(255,255,255,0.10);
+
+            border-radius: 6px;
+
+            color: white;
+
+            outline: none;
+        }
+
+        .contact-form textarea {
+            min-height: 120px;
+
+            resize: vertical;
+        }
+
+        .contact-form input:focus,
+        .contact-form textarea:focus {
+            border-color: var(--purple);
+        }
+
+        .submit-btn {
+            width: 100%;
+
+            padding: 13px;
+
+            border: none;
+
+            border-radius: 6px;
+
+            color: white;
+
+            background: linear-gradient(
+                135deg,
+                #a338ed,
+                #7520ca
+            );
+
+            font-weight: 800;
+
+            cursor: pointer;
+        }
+
+
+        /* =========================================================
+           FOOTER
+           ========================================================= */
+
+        footer {
+            padding: 35px 0;
+
+            border-top: 1px solid rgba(255,255,255,0.08);
+
+            background: #050507;
+        }
+
+        .footer-grid {
+            display: grid;
+
+            grid-template-columns:
+                1.1fr 1fr 1.3fr;
+
+            gap: 35px;
+
+            align-items: center;
+        }
+
+        .footer-logo {
+            font-size: 22px;
+
+            font-weight: 900;
+        }
+
+        .footer-logo span {
+            color: var(--purple3);
+        }
+
+        .footer-text {
+            color: #77717e;
+
+            font-size: 10px;
+
+            line-height: 1.7;
+        }
+
+        .rera-box {
+            padding-left: 20px;
+
+            border-left: 1px solid rgba(255,255,255,0.12);
+
+            color: #aaa2ae;
+
+            font-size: 10px;
+
+            line-height: 1.7;
+        }
+
+        .rera-box strong {
+            color: white;
+
+            display: block;
+
+            margin-bottom: 5px;
+        }
+
+        .copyright {
+            margin-top: 30px;
+
+            padding-top: 20px;
+
+            border-top: 1px solid rgba(255,255,255,0.06);
+
+            display: flex;
+
+            justify-content: space-between;
+
+            color: #66616c;
+
+            font-size: 9px;
+        }
+
+
+        /* =========================================================
+           FLOATING WHATSAPP
+           ========================================================= */
+
+        .floating-whatsapp {
+            position: fixed;
+
+            right: 22px;
+            bottom: 22px;
+
+            z-index: 999;
+
+            width: 54px;
+            height: 54px;
+
+            display: flex;
+            align-items: center;
+            justify-content: center;
+
+            border-radius: 50%;
+
+            background: #8d2be0;
+
+            color: white;
+
+            font-size: 22px;
+
+            box-shadow:
+                0 8px 30px rgba(139,43,224,0.45);
+
+            transition: 0.25s;
+        }
+
+        .floating-whatsapp:hover {
+            transform: scale(1.08);
+
+            background: #a83cff;
+        }
+
+
+        /* =========================================================
+           RESPONSIVE
+           ========================================================= */
+
+        @media(max-width: 950px) {
+
+            .nav-links {
+                display: none;
+            }
+
+            .deal-grid,
+            .property-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .trust-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .about-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .about-main {
+                grid-column: 1 / -1;
+            }
+
+            .contact-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .footer-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .rera-box {
+                padding-left: 0;
+
+                border-left: none;
+            }
+        }
+
+
+        @media(max-width: 650px) {
+
+            .hero {
+                min-height: 650px;
+            }
+
+            .hero h1 {
+                font-size: 47px;
+
+                letter-spacing: -2px;
+            }
+
+            .search-box {
+                display: block;
+
+                padding: 10px;
+            }
+
+            .search-main {
+                border-right: none;
+
+                border-bottom: 1px solid rgba(255,255,255,0.1);
+            }
+
+            .filter {
+                height: 55px;
+
+                border-right: none;
+
+                border-bottom: 1px solid rgba(255,255,255,0.1);
+            }
+
+            .search-btn {
+                width: 100%;
+
+                height: 45px;
+            }
+
+            .deal-grid,
+            .property-grid,
+            .trust-grid,
+            .about-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .section-heading {
+                display: block;
+            }
+
+            .view-all {
+                display: inline-block;
+
+                margin-top: 10px;
+            }
+
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+
+            .copyright {
+                display: block;
+            }
+
+            .copyright div:last-child {
+                margin-top: 8px;
+            }
+        }
+
+    </style>
+</head>
+
+
+<body>
+
+
+<!-- =========================================================
+     HEADER
+     ========================================================= -->
+
+<header>
+
+    <div class="container navbar">
+
+        <!--
+            FUTURE:
+            Admin Panel se actual MONEYLAND logo upload hoga.
+            Filhaal text logo.
+        -->
+
+        <a href="#" class="logo-placeholder">
+
+            M<span>O</span>NEYLAND
+
+            <div class="logo-sub">
+                CORPORATION
+            </div>
+
+        </a>
+
+
+        <nav class="nav-links">
+
+            <a href="#properties">Buy</a>
+
+            <a href="#fresh-booking">
+                Fresh Booking
+            </a>
+
+            <a href="#resale">
+                Resale
+            </a>
+
+            <a href="#rental">
+                Rental
+            </a>
+
+            <a href="#about">
+                About
+            </a>
+
+            <a href="#careers">
+                Careers
+            </a>
+
+            <a href="#contact">
+                Contact
+            </a>
+
+            <a
+                class="nav-whatsapp"
+                href="https://wa.me/918178593108"
+                target="_blank"
+            >
+                ◉ &nbsp; Contact / WhatsApp
+            </a>
+
+        </nav>
+
+    </div>
+
+</header>
+
+
+
+<!-- =========================================================
+     HERO
+     ========================================================= -->
+
 <section class="hero">
- <div class="container">
-  <div class="eyebrow">Simple property discovery</div>
-  <h1>Find your next property, <span>your way.</span></h1>
-  <p>Fresh bookings, resale deals and rental properties — published directly by MONEYLAND.</p>
-  <div class="deal-picker" id="dealPicker">
-   <button class="active" data-type="all">All Properties</button>
-   <button data-type="Fresh Booking">Fresh Booking</button>
-   <button data-type="Resale">Resale</button>
-   <button data-type="Rental">Rental</button>
-  </div>
-  <div class="search"><input id="search" placeholder="Search city, sector, project or property..."><button onclick="loadProperties()">Search</button></div>
- </div>
+
+    <!--
+        IMAGE PLACEHOLDER
+
+        BLACK INTENTIONALLY.
+
+        Later Admin Panel:
+        Website Settings
+        → Hero Image Upload
+        → Database/Storage
+        → Automatically displayed here.
+    -->
+
+    <div class="hero-image-placeholder"></div>
+
+
+    <div class="container hero-content">
+
+        <div class="eyebrow">
+            MONEYLAND CORPORATION
+        </div>
+
+
+        <h1>
+
+            Find Your Property
+
+            <br>
+
+            in <span>Gurgaon</span>
+
+        </h1>
+
+
+        <p class="hero-description">
+
+            Fresh Bookings
+            &nbsp;•&nbsp;
+            Resale Deals
+            &nbsp;•&nbsp;
+            Rental Properties
+
+        </p>
+
+
+        <!-- SEARCH -->
+
+        <div class="search-box">
+
+
+            <div class="search-main">
+
+                <span class="search-icon">
+                    ⌕
+                </span>
+
+                <input
+                    type="text"
+                    id="searchInput"
+                    placeholder="Search by location, sector, project or property..."
+                >
+
+            </div>
+
+
+            <div class="filter">
+
+                <small>
+                    Deal Type
+                </small>
+
+                <select id="dealFilter">
+
+                    <option value="all">
+                        All
+                    </option>
+
+                    <option value="fresh">
+                        Fresh Booking
+                    </option>
+
+                    <option value="resale">
+                        Resale
+                    </option>
+
+                    <option value="rental">
+                        Rental
+                    </option>
+
+                </select>
+
+            </div>
+
+
+            <div class="filter">
+
+                <small>
+                    Budget
+                </small>
+
+                <select>
+
+                    <option>
+                        All
+                    </option>
+
+                    <option>
+                        Under ₹50 L
+                    </option>
+
+                    <option>
+                        ₹50 L - ₹1 Cr
+                    </option>
+
+                    <option>
+                        ₹1 Cr - ₹2 Cr
+                    </option>
+
+                    <option>
+                        ₹2 Cr+
+                    </option>
+
+                </select>
+
+            </div>
+
+
+            <div class="filter">
+
+                <small>
+                    BHK
+                </small>
+
+                <select>
+
+                    <option>
+                        All
+                    </option>
+
+                    <option>
+                        1 BHK
+                    </option>
+
+                    <option>
+                        2 BHK
+                    </option>
+
+                    <option>
+                        3 BHK
+                    </option>
+
+                    <option>
+                        4 BHK
+                    </option>
+
+                    <option>
+                        5+ BHK
+                    </option>
+
+                </select>
+
+            </div>
+
+
+            <div class="filter">
+
+                <small>
+                    Property Type
+                </small>
+
+                <select>
+
+                    <option>
+                        All
+                    </option>
+
+                    <option>
+                        Apartment
+                    </option>
+
+                    <option>
+                        Villa
+                    </option>
+
+                    <option>
+                        Plot
+                    </option>
+
+                    <option>
+                        Commercial
+                    </option>
+
+                    <option>
+                        Office
+                    </option>
+
+                </select>
+
+            </div>
+
+
+            <button
+                class="search-btn"
+                onclick="searchProperties()"
+            >
+
+                ⌕ Search
+
+            </button>
+
+        </div>
+
+    </div>
+
 </section>
 
-<section id="properties"><div class="container">
- <div class="section-title"><h2>Latest Properties</h2><p>Every published property from the MONEYLAND admin portal appears here automatically.</p></div>
- <div class="cards" id="cards"></div>
-</div></section>
 
-<section id="about" class="info"><div class="container columns">
- <div><h3>About MONEYLAND</h3><p>A property discovery platform built to bring fresh bookings, resale opportunities and rentals into one simple experience.</p></div>
- <div><h3>For Owners & Builders</h3><p>Our admin portal is designed so your team can add a property, upload images and publish it to the main website without editing the frontend code.</p></div>
- <div id="careers"><h3>Careers</h3><p>We are building a modern real-estate technology platform. Add your careers form and openings here as the business grows.</p></div>
-</div></section>
 
-<section id="team"><div class="container"><div class="section-title"><h2>Our Team</h2><p>People building the MONEYLAND property experience.</p></div>
- <div class="team"><div class="person"><strong>Founder / Director</strong><small>MONEYLAND</small></div><div class="person"><strong>Property Operations</strong><small>Listings & verification</small></div><div class="person"><strong>Customer Experience</strong><small>Leads & support</small></div></div>
-</div></section>
+<!-- =========================================================
+     DEAL TYPE CARDS
+     ========================================================= -->
 
-<section id="contact" class="info"><div class="container columns">
- <div><h3>Contact</h3><p>For property enquiries, partnerships and business queries, connect with the MONEYLAND team.</p></div>
- <div><h3>Office</h3><p>Add your official office address, phone and business hours here.</p></div>
- <div><h3>Enquiries</h3><p>Add your official email and WhatsApp/contact details here.</p></div>
-</div></section>
-</main>
-<footer><div class="container"><span>© <span id="year"></span> MONEYLAND</span><span>Property • People • Possibilities</span></div></footer>
+<section class="deal-types">
+
+    <div class="container">
+
+        <div class="deal-grid">
+
+
+            <!-- FRESH -->
+
+            <a
+                href="#properties"
+                class="deal-card"
+                id="fresh-booking"
+            >
+
+                <div class="deal-icon">
+                    ▦
+                </div>
+
+                <div>
+
+                    <h3>
+                        Fresh Booking
+                    </h3>
+
+                    <p>
+                        Book your dream home directly
+                        from trusted builders and projects.
+                    </p>
+
+                </div>
+
+                <div class="deal-arrow">
+                    →
+                </div>
+
+            </a>
+
+
+            <!-- RESALE -->
+
+            <a
+                href="#properties"
+                class="deal-card"
+                id="resale"
+            >
+
+                <div class="deal-icon">
+                    ⌂
+                </div>
+
+                <div>
+
+                    <h3>
+                        Resale Deals
+                    </h3>
+
+                    <p>
+                        Verified resale properties
+                        at competitive market prices.
+                    </p>
+
+                </div>
+
+                <div class="deal-arrow">
+                    →
+                </div>
+
+            </a>
+
+
+            <!-- RENTAL -->
+
+            <a
+                href="#properties"
+                class="deal-card"
+                id="rental"
+            >
+
+                <div class="deal-icon">
+                    ⚿
+                </div>
+
+                <div>
+
+                    <h3>
+                        Rental Deals
+                    </h3>
+
+                    <p>
+                        Find the right rental property
+                        for your residential or business needs.
+                    </p>
+
+                </div>
+
+                <div class="deal-arrow">
+                    →
+                </div>
+
+            </a>
+
+
+        </div>
+
+    </div>
+
+</section>
+
+
+
+<!-- =========================================================
+     FEATURED PROPERTIES
+     ========================================================= -->
+
+<section id="properties">
+
+    <div class="container">
+
+
+        <div class="section-heading">
+
+            <div>
+
+                <div class="section-label">
+                    Featured Properties
+                </div>
+
+                <h2>
+                    Featured Properties in Gurgaon
+                </h2>
+
+            </div>
+
+
+            <a href="#" class="view-all">
+                View All Properties →
+            </a>
+
+        </div>
+
+
+
+        <div
+            class="property-grid"
+            id="propertyGrid"
+        >
+
+
+            <!-- =================================================
+                 PROPERTY 1
+                 =================================================
+
+                 IMAGE INTENTIONALLY BLACK.
+
+                 Future:
+                 Admin uploads property
+                 ↓
+                 property image URL
+                 ↓
+                 JavaScript/API
+                 ↓
+                 this black area replaced by image.
+            -->
+
+            <article
+                class="property-card"
+                data-type="fresh"
+                data-search="m3m capital sector 113 gurgaon"
+            >
+
+                <div class="property-image">
+
+                    <!-- ADMIN IMAGE WILL COME HERE -->
+
+                    <img
+                        src=""
+                        alt="Property"
+                    >
+
+                    <span class="property-badge">
+                        FRESH BOOKING
+                    </span>
+
+                </div>
+
+
+                <div class="property-content">
+
+                    <h3 class="property-title">
+                        Property Title
+                    </h3>
+
+                    <div class="property-location">
+                        Sector, Gurgaon
+                    </div>
+
+                    <div class="property-price">
+                        ₹ Price
+                    </div>
+
+                    <div class="property-info">
+
+                        <span>
+                            3 BHK
+                        </span>
+
+                        <span>
+                            •
+                        </span>
+
+                        <span>
+                            Area Sq.ft
+                        </span>
+
+                    </div>
+
+                </div>
+
+            </article>
+
+
+
+            <!-- PROPERTY 2 -->
+
+            <article
+                class="property-card"
+                data-type="resale"
+                data-search="resale property gurgaon"
+            >
+
+                <div class="property-image">
+
+                    <!-- ADMIN IMAGE WILL COME HERE -->
+
+                    <img
+                        src=""
+                        alt="Property"
+                    >
+
+                    <span class="property-badge">
+                        RESALE DEAL
+                    </span>
+
+                </div>
+
+
+                <div class="property-content">
+
+                    <h3 class="property-title">
+                        Property Title
+                    </h3>
+
+                    <div class="property-location">
+                        Sector, Gurgaon
+                    </div>
+
+                    <div class="property-price">
+                        ₹ Price
+                    </div>
+
+                    <div class="property-info">
+
+                        <span>
+                            4 BHK
+                        </span>
+
+                        <span>
+                            •
+                        </span>
+
+                        <span>
+                            Area Sq.ft
+                        </span>
+
+                    </div>
+
+                </div>
+
+            </article>
+
+
+
+            <!-- PROPERTY 3 -->
+
+            <article
+                class="property-card"
+                data-type="rental"
+                data-search="rental property gurgaon"
+            >
+
+                <div class="property-image">
+
+                    <!-- ADMIN IMAGE WILL COME HERE -->
+
+                    <img
+                        src=""
+                        alt="Property"
+                    >
+
+                    <span class="property-badge">
+                        RENTAL DEAL
+                    </span>
+
+                </div>
+
+
+                <div class="property-content">
+
+                    <h3 class="property-title">
+                        Property Title
+                    </h3>
+
+                    <div class="property-location">
+                        Sector, Gurgaon
+                    </div>
+
+                    <div class="property-price">
+                        ₹ Price / month
+                    </div>
+
+                    <div class="property-info">
+
+                        <span>
+                            2 BHK
+                        </span>
+
+                        <span>
+                            •
+                        </span>
+
+                        <span>
+                            Area Sq.ft
+                        </span>
+
+                    </div>
+
+                </div>
+
+            </article>
+
+
+        </div>
+
+    </div>
+
+</section>
+
+
+
+<!-- =========================================================
+     WHY MONEYLAND
+     ========================================================= -->
+
+<section class="trust-section">
+
+    <div class="container">
+
+        <div class="trust-grid">
+
+
+            <div class="trust-intro">
+
+                <div class="section-label">
+                    Why MONEYLAND
+                </div>
+
+                <h2>
+
+                    Your Trusted
+
+                    <br>
+
+                    Real Estate Partner
+
+                    <br>
+
+                    <span>
+                        in Gurgaon
+                    </span>
+
+                </h2>
+
+            </div>
+
+
+            <div class="trust-item">
+
+                <div class="trust-icon">
+                    ◇
+                </div>
+
+                <h3>
+                    Verified Property Assistance
+                </h3>
+
+                <p>
+                    Assistance in finding genuine
+                    properties and relevant
+                    RERA-related project information.
+                </p>
+
+            </div>
+
+
+            <div class="trust-item">
+
+                <div class="trust-icon">
+                    ♢
+                </div>
+
+                <h3>
+                    Transparent Dealing
+                </h3>
+
+                <p>
+                    Clear property information,
+                    straightforward communication
+                    and professional assistance.
+                </p>
+
+            </div>
+
+
+            <div class="trust-item">
+
+                <div class="trust-icon">
+                    ◉
+                </div>
+
+                <h3>
+                    End-to-End Support
+                </h3>
+
+                <p>
+                    From property search and
+                    site visits to transaction
+                    coordination and support.
+                </p>
+
+            </div>
+
+
+        </div>
+
+    </div>
+
+</section>
+
+
+
+<!-- =========================================================
+     ABOUT + CAREERS + QUICK INFO
+     ========================================================= -->
+
+<section
+    class="about-section"
+    id="about"
+>
+
+
+    <!--
+        FUTURE ABOUT IMAGE
+        Currently black.
+    -->
+
+    <div class="about-image-placeholder"></div>
+
+
+    <div class="container about-grid">
+
+
+        <!-- ABOUT -->
+
+        <div class="about-main">
+
+            <div class="section-label">
+                About MONEYLAND
+            </div>
+
+            <h2>
+
+                More Than Just Properties
+
+                <br>
+
+                <span>
+                    We Build Futures
+                </span>
+
+            </h2>
+
+            <p>
+
+                MONEYLAND CORPORATION is a
+                Gurgaon-based real estate company
+                focused on helping buyers, investors,
+                tenants and property owners connect
+                with suitable real estate opportunities.
+
+                <br><br>
+
+                Our platform brings Fresh Bookings,
+                Resale Deals and Rental Properties
+                together in one simple experience.
+
+            </p>
+
+
+            <a
+                href="#contact"
+                class="outline-btn"
+            >
+                Know More &nbsp; →
+            </a>
+
+        </div>
+
+
+
+        <!-- CAREERS -->
+
+        <div
+            class="mini-column"
+            id="careers"
+        >
+
+            <div class="section-label">
+                Careers
+            </div>
+
+            <h3>
+                Build Your Career
+                With MONEYLAND
+            </h3>
+
+            <p>
+
+                Join our growing real estate
+                team and be part of a modern
+                property platform in Gurgaon.
+
+            </p>
+
+            <a
+                href="mailto:rrahmawat@gmail.com?subject=Career%20Enquiry%20-%20MONEYLAND"
+                class="outline-btn"
+            >
+                Send Resume →
+            </a>
+
+        </div>
+
+
+
+        <!-- QUICK CONTACT -->
+
+        <div
+            class="mini-column"
+            id="contact"
+        >
+
+            <div class="section-label">
+                Contact Us
+            </div>
+
+            <h3>
+                Get In Touch
+            </h3>
+
+            <p>
+                We're here to help you with
+                your real estate requirements.
+            </p>
+
+
+            <div class="contact-item">
+
+                <div class="contact-item-icon">
+                    ☎
+                </div>
+
+                <div>
+
+                    <small>
+                        PHONE
+                    </small>
+
+                    <strong>
+                        +91 8178593108
+                    </strong>
+
+                </div>
+
+            </div>
+
+
+            <div class="contact-item">
+
+                <div class="contact-item-icon">
+                    ✉
+                </div>
+
+                <div>
+
+                    <small>
+                        EMAIL
+                    </small>
+
+                    <strong>
+                        rrahmawat@gmail.com
+                    </strong>
+
+                </div>
+
+            </div>
+
+
+        </div>
+
+
+    </div>
+
+</section>
+
+
+
+<!-- =========================================================
+     CONTACT SECTION
+     ========================================================= -->
+
+<section class="contact-section">
+
+    <div class="container contact-grid">
+
+
+        <div class="contact-left">
+
+            <div class="section-label">
+                Contact MONEYLAND
+            </div>
+
+            <h2>
+
+                Let's Find Your
+
+                <br>
+
+                <span>
+                    Next Property
+                </span>
+
+            </h2>
+
+            <p>
+
+                Tell us what you're looking for
+                and our team can help you explore
+                relevant property opportunities
+                in Gurgaon.
+
+            </p>
+
+
+            <div class="contact-details">
+
+
+                <!-- PHONE -->
+
+                <div class="contact-item">
+
+                    <div class="contact-item-icon">
+                        ☎
+                    </div>
+
+                    <div>
+
+                        <small>
+                            CALL US
+                        </small>
+
+                        <strong>
+                            +91 8178593108
+                        </strong>
+
+                    </div>
+
+                </div>
+
+
+
+                <!-- EMAIL -->
+
+                <div class="contact-item">
+
+                    <div class="contact-item-icon">
+                        ✉
+                    </div>
+
+                    <div>
+
+                        <small>
+                            EMAIL
+                        </small>
+
+                        <strong>
+                            rrahmawat@gmail.com
+                        </strong>
+
+                    </div>
+
+                </div>
+
+
+
+                <!-- ADDRESS -->
+
+                <div class="contact-item">
+
+                    <div class="contact-item-icon">
+                        ⌖
+                    </div>
+
+                    <div>
+
+                        <small>
+                            OFFICE
+                        </small>
+
+                        <strong>
+
+                            M3M 65th Avenue,
+                            R1-205,<br>
+
+                            Emerald Hills Road,
+                            Sector 65,<br>
+
+                            Gurgaon, Gurugram,
+                            Haryana - 122018
+
+                        </strong>
+
+                    </div>
+
+                </div>
+
+
+            </div>
+
+
+            <a
+                href="https://wa.me/918178593108?text=Hello%20MONEYLAND%2C%20I%20am%20looking%20for%20a%20property%20in%20Gurgaon."
+                target="_blank"
+                class="outline-btn"
+            >
+                WhatsApp Us →
+            </a>
+
+        </div>
+
+
+
+        <!-- CONTACT FORM -->
+
+        <div class="contact-form">
+
+            <h3>
+                Property Enquiry
+            </h3>
+
+
+            <form
+                onsubmit="submitEnquiry(event)"
+            >
+
+
+                <div class="form-row">
+
+                    <input
+                        type="text"
+                        id="name"
+                        placeholder="Your Name"
+                        required
+                    >
+
+                    <input
+                        type="tel"
+                        id="phone"
+                        placeholder="Mobile Number"
+                        required
+                    >
+
+                </div>
+
+
+                <input
+                    type="email"
+                    id="email"
+                    placeholder="Email Address"
+                >
+
+
+                <input
+                    type="text"
+                    id="requirement"
+                    placeholder="What property are you looking for?"
+                >
+
+
+                <textarea
+                    id="message"
+                    placeholder="Tell us about your requirement..."
+                ></textarea>
+
+
+                <button
+                    type="submit"
+                    class="submit-btn"
+                >
+                    Send Enquiry
+                </button>
+
+
+            </form>
+
+        </div>
+
+
+    </div>
+
+</section>
+
+
+
+<!-- =========================================================
+     FOOTER
+     ========================================================= -->
+
+<footer>
+
+    <div class="container">
+
+
+        <div class="footer-grid">
+
+
+            <div>
+
+                <div class="footer-logo">
+
+                    M<span>O</span>NEYLAND
+
+                </div>
+
+                <div class="footer-text">
+
+                    CORPORATION
+
+                    <br><br>
+
+                    Real Estate.
+                    Real People.
+                    Real Growth.
+
+                </div>
+
+            </div>
+
+
+
+            <!-- RERA -->
+
+            <div class="rera-box">
+
+                <strong>
+                    Haryana RERA Registered Real Estate Agent
+                </strong>
+
+                Registration No.:
+
+                <br>
+
+                <strong>
+                    RC/HARE/RA/GGM/4078/3673/2026/113
+                </strong>
+
+            </div>
+
+
+
+            <div class="footer-text">
+
+                <strong style="color:white;">
+                    MONEYLAND CORPORATION
+                </strong>
+
+                <br><br>
+
+                M3M 65th Avenue,
+                R1-205,<br>
+
+                Emerald Hills Road,
+                Sector 65,<br>
+
+                Gurgaon, Gurugram,
+                Haryana - 122018
+
+                <br><br>
+
+                +91 8178593108
+
+                <br>
+
+                rrahmawat@gmail.com
+
+            </div>
+
+
+        </div>
+
+
+
+        <div class="copyright">
+
+            <div>
+                © <span id="year"></span>
+                MONEYLAND CORPORATION.
+                All Rights Reserved.
+            </div>
+
+            <div>
+                Haryana RERA Registered Real Estate Agent
+            </div>
+
+        </div>
+
+
+    </div>
+
+</footer>
+
+
+
+<!-- =========================================================
+     FLOATING WHATSAPP
+     ========================================================= -->
+
+<a
+    href="https://wa.me/918178593108?text=Hello%20MONEYLAND%2C%20I%20am%20looking%20for%20a%20property%20in%20Gurgaon."
+    target="_blank"
+    class="floating-whatsapp"
+    title="Chat on WhatsApp"
+>
+    ◉
+</a>
+
+
+
+<!-- =========================================================
+     JAVASCRIPT
+     ========================================================= -->
 
 <script>
-let selectedType="all";
-const cards=document.getElementById("cards");
-document.getElementById("year").textContent=new Date().getFullYear();
-document.querySelectorAll("#dealPicker button").forEach(b=>b.onclick=()=>{
- document.querySelectorAll("#dealPicker button").forEach(x=>x.classList.remove("active"));
- b.classList.add("active"); selectedType=b.dataset.type; loadProperties();
-});
-document.getElementById("search").addEventListener("keydown",e=>{if(e.key==="Enter")loadProperties()});
 
-async function loadProperties(){
- const q=document.getElementById("search").value.trim();
- const url=new URL("/api/properties",location.origin);
- if(selectedType!=="all")url.searchParams.set("type",selectedType);
- if(q)url.searchParams.set("q",q);
- const res=await fetch(url); const data=await res.json();
- if(!data.length){cards.innerHTML='<div class="empty">No published properties found for this selection.</div>';return}
- cards.innerHTML=data.map(p=>`
-  <a class="card" href="/property.html?id=${encodeURIComponent(p.id)}">
-   <div class="pic">${p.images?.[0]?`<img src="${p.images[0].url}" alt="">`:''}<span class="badge">${p.dealType}</span></div>
-   <div class="body"><h3>${esc(p.title)}</h3><div class="muted">${esc(p.location)}, ${esc(p.city)}</div><div class="price">${esc(p.price)}</div><div class="muted">${esc(p.bhk||"")} ${p.area?"• "+esc(p.area):""}</div></div>
-  </a>`).join("");
-}
-function esc(v){return String(v??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]))}
-loadProperties();
+
+    /* =========================================================
+       CURRENT YEAR
+       ========================================================= */
+
+    document.getElementById("year").textContent =
+        new Date().getFullYear();
+
+
+
+    /* =========================================================
+       PROPERTY SEARCH
+
+       CURRENTLY FRONTEND DEMO.
+
+       Later:
+
+       searchProperties()
+       ↓
+       API
+       ↓
+       Database
+       ↓
+       Admin uploaded properties
+    ========================================================= */
+
+    function searchProperties() {
+
+        const search =
+            document
+                .getElementById("searchInput")
+                .value
+                .toLowerCase()
+                .trim();
+
+        const type =
+            document
+                .getElementById("dealFilter")
+                .value;
+
+
+        const cards =
+            document.querySelectorAll(
+                ".property-card"
+            );
+
+
+        cards.forEach(card => {
+
+            const cardType =
+                card.dataset.type;
+
+            const cardSearch =
+                card.dataset.search;
+
+
+            let show = true;
+
+
+            /* Deal type filter */
+
+            if (
+                type !== "all" &&
+                cardType !== type
+            ) {
+
+                show = false;
+
+            }
+
+
+            /* Search filter */
+
+            if (
+                search &&
+                !cardSearch.includes(search)
+            ) {
+
+                show = false;
+
+            }
+
+
+            card.style.display =
+                show
+                    ? ""
+                    : "none";
+
+        });
+
+
+        document
+            .getElementById("properties")
+            .scrollIntoView({
+                behavior: "smooth"
+            });
+
+    }
+
+
+
+    /* Enter key search */
+
+    document
+        .getElementById("searchInput")
+        .addEventListener(
+            "keydown",
+            function(event) {
+
+                if (event.key === "Enter") {
+
+                    searchProperties();
+
+                }
+
+            }
+        );
+
+
+
+    /* =========================================================
+       CONTACT ENQUIRY
+
+       CURRENTLY OPENS WHATSAPP.
+
+       Later:
+       Admin CRM + Database + Lead Management.
+    ========================================================= */
+
+    function submitEnquiry(event) {
+
+        event.preventDefault();
+
+
+        const name =
+            document
+                .getElementById("name")
+                .value;
+
+        const phone =
+            document
+                .getElementById("phone")
+                .value;
+
+        const email =
+            document
+                .getElementById("email")
+                .value;
+
+        const requirement =
+            document
+                .getElementById("requirement")
+                .value;
+
+        const message =
+            document
+                .getElementById("message")
+                .value;
+
+
+        const whatsappMessage =
+
+            "Hello MONEYLAND,%0A%0A" +
+
+            "Name: " +
+            encodeURIComponent(name) +
+
+            "%0A" +
+
+            "Phone: " +
+            encodeURIComponent(phone) +
+
+            "%0A" +
+
+            "Email: " +
+            encodeURIComponent(email) +
+
+            "%0A" +
+
+            "Requirement: " +
+            encodeURIComponent(requirement) +
+
+            "%0A" +
+
+            "Message: " +
+            encodeURIComponent(message);
+
+
+        window.open(
+
+            "https://wa.me/918178593108?text=" +
+            whatsappMessage,
+
+            "_blank"
+
+        );
+
+    }
+
+
 </script>
+
+
 </body>
 </html>
-''', encoding="utf-8")
-
-# ---------------- property detail ----------------
-(root/"public/property.html").write_text(r'''<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Property | MONEYLAND</title>
-<style>
-body{margin:0;background:#09090b;color:#f7f4fa;font-family:Inter,system-ui,Arial}.wrap{width:min(1100px,92%);margin:auto}header{height:70px;border-bottom:1px solid #252129;display:flex;align-items:center;justify-content:space-between}.logo{font-weight:900;font-size:20px}a{color:#c056ff;text-decoration:none}.hero{padding:30px 0}.gallery{display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;height:480px}.gallery img{width:100%;height:100%;object-fit:cover;border-radius:8px;background:#19171b}.gallery img:first-child{grid-row:span 2}.badge{display:inline-block;background:#8e2cdb;border-radius:4px;padding:5px 8px;font-size:10px;font-weight:800;margin-top:25px}.grid{display:grid;grid-template-columns:2fr 1fr;gap:30px;margin-top:25px}.panel{border:1px solid #2a252e;background:#111014;border-radius:9px;padding:20px}.price{font-size:27px;font-weight:900;margin:12px 0}.muted{color:#9c96a1;font-size:12px;line-height:1.7}.contact{display:block;text-align:center;background:#9c35e7;color:white;padding:12px;border-radius:6px;margin-top:15px}@media(max-width:700px){.gallery{height:300px;grid-template-columns:1fr 1fr}.gallery img:first-child{grid-column:span 2;grid-row:auto}.grid{grid-template-columns:1fr}}
-</style></head><body><div class="wrap"><header><a class="logo" href="/">◆ MONEYLAND</a><a href="/">← All Properties</a></header><main class="hero" id="app"></main></div>
-<script>
-(async()=>{const id=new URLSearchParams(location.search).get("id");const r=await fetch("/api/properties/"+encodeURIComponent(id));const p=await r.json();if(!r.ok){document.getElementById("app").innerHTML="<h2>Property not found</h2>";return}
-const imgs=(p.images||[]).slice(0,10);document.getElementById("app").innerHTML=`
-<div class="gallery">${imgs.map(x=>`<img src="${x.url}" alt="">`).join("")}</div>
-<span class="badge">${esc(p.dealType)}</span><div class="grid"><div class="panel"><h1>${esc(p.title)}</h1><div class="muted">${esc(p.location)}, ${esc(p.city)}</div><div class="price">${esc(p.price)}</div><p class="muted">${esc(p.description)}</p><p class="muted">${esc(p.propertyType)} ${p.bhk?"• "+esc(p.bhk):""} ${p.area?"• "+esc(p.area):""} ${p.bathrooms?"• "+esc(p.bathrooms)+" Bath":""}</p></div><div class="panel"><h3>Interested?</h3><p class="muted">Contact details can be connected to your lead/CRM system in the next module.</p><a class="contact" href="/#contact">Contact MONEYLAND</a></div></div>`;
-function esc(v){return String(v??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]))}})();
-</script></body></html>
-''', encoding="utf-8")
-
-# ---------------- admin ----------------
-(root/"public/admin/index.html").write_text(r'''<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MONEYLAND Admin</title>
-<style>
-*{box-sizing:border-box}body{margin:0;background:#09090b;color:#f5f2f8;font-family:Inter,system-ui,Arial}.wrap{width:min(1180px,94%);margin:auto}header{height:70px;border-bottom:1px solid #27222c;display:flex;align-items:center;justify-content:space-between}.logo{font-size:20px;font-weight:900}button{cursor:pointer}.topbtn{background:#161219;border:1px solid #50305e;color:#eee;border-radius:6px;padding:8px 12px}.login{width:min(400px,100%);margin:100px auto;background:#121015;border:1px solid #2e2834;border-radius:10px;padding:25px}.login h1{margin-top:0}.field{margin:13px 0}.field label{display:block;font-size:11px;color:#aaa3af;margin-bottom:6px}.field input,.field select,.field textarea{width:100%;background:#0b0a0d;border:1px solid #3a323f;color:#fff;border-radius:6px;padding:11px}.field textarea{min-height:100px;resize:vertical}.primary{width:100%;border:0;background:#9835e4;color:#fff;padding:12px;border-radius:6px;font-weight:800}.msg{font-size:11px;color:#d79bf6;margin-top:10px}.dash{padding:28px 0}.layout{display:grid;grid-template-columns:350px 1fr;gap:20px}.panel{background:#111014;border:1px solid #2b2630;border-radius:9px;padding:18px}.panel h2{font-size:17px;margin-top:0}.deal-buttons{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:15px}.deal-buttons button{padding:9px 4px;border:1px solid #49334f;background:#171219;color:#bbb2c0;border-radius:6px;font-size:10px}.deal-buttons button.active{background:#9432db;color:#fff;border-color:#ae48ef}.drop{border:1px dashed #57445e;padding:17px;text-align:center;border-radius:7px;color:#aaa3af;font-size:11px}.preview{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-top:8px}.preview img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:4px}.property-row{display:grid;grid-template-columns:70px 1fr auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid #242028}.thumb{width:70px;height:55px;object-fit:cover;border-radius:5px;background:#222}.row-title{font-size:12px;font-weight:800}.row-meta{font-size:9px;color:#99919e;margin-top:4px}.status{font-size:9px;color:#c45cff}.actions{display:flex;gap:5px;flex-wrap:wrap}.small{padding:6px 8px;border:1px solid #49304f;background:#171117;color:#ddd;border-radius:5px;font-size:9px}.danger{border-color:#71323c}.hidden{display:none}@media(max-width:850px){.layout{grid-template-columns:1fr}}
-</style></head><body>
-<header><div class="wrap" style="display:flex;justify-content:space-between;width:94%"><div class="logo">◆ MONEYLAND ADMIN</div><div><a href="/" class="topbtn">Main Website</a> <button class="topbtn" onclick="logout()">Logout</button></div></div></header>
-
-<div class="wrap">
-<div id="login" class="login">
-<h1>Admin Login</h1><p style="color:#999;font-size:11px">Only authorised MONEYLAND staff should access this portal.</p>
-<div class="field"><label>Username</label><input id="user" value="admin"></div>
-<div class="field"><label>Password</label><input id="pass" type="password"></div>
-<button class="primary" onclick="login()">Login</button><div class="msg" id="loginMsg"></div>
-</div>
-
-<div id="dashboard" class="dash hidden">
-<div class="layout">
-<div class="panel"><h2>Add Property</h2>
-<div class="deal-buttons" id="deal"><button data-v="Fresh Booking" class="active">Fresh Booking</button><button data-v="Resale">Resale</button><button data-v="Rental">Rental</button></div>
-<form id="form" enctype="multipart/form-data">
-<input type="hidden" id="dealType" name="dealType" value="Fresh Booking">
-<div class="field"><label>Property Title *</label><input name="title" required placeholder="3 BHK Premium Apartment"></div>
-<div class="field"><label>Property Type</label><select name="propertyType"><option>Residential</option><option>Commercial</option><option>Plot</option><option>Villa</option><option>Farm</option><option>Office</option></select></div>
-<div class="field"><label>City *</label><input name="city" value="Gurgaon" required></div>
-<div class="field"><label>Location / Sector</label><input name="location" placeholder="Sector 84, Gurgaon"></div>
-<div class="field"><label>Price *</label><input name="price" required placeholder="₹1.85 Cr"></div>
-<div class="field"><label>Area</label><input name="area" placeholder="1850 Sq.ft"></div>
-<div class="field"><label>BHK</label><input name="bhk" placeholder="3 BHK"></div>
-<div class="field"><label>Bathrooms</label><input name="bathrooms" placeholder="3"></div>
-<div class="field"><label>Possession</label><input name="possession" placeholder="Ready to Move"></div>
-<div class="field"><label>Description</label><textarea name="description"></textarea></div>
-<div class="field"><label>Up to 10 property images</label><div class="drop">Choose up to 10 JPG / PNG / WEBP images<input style="margin-top:10px" id="images" name="images" type="file" accept="image/jpeg,image/png,image/webp" multiple></div><div class="preview" id="preview"></div></div>
-<button class="primary" type="submit">Publish Property</button><div class="msg" id="formMsg"></div>
-</form>
-</div>
-
-<div class="panel"><h2>Properties</h2><div id="list"></div></div>
-</div>
-</div></div>
-
-<script>
-const $=id=>document.getElementById(id);
-document.querySelectorAll("#deal button").forEach(b=>b.onclick=()=>{document.querySelectorAll("#deal button").forEach(x=>x.classList.remove("active"));b.classList.add("active");$("dealType").value=b.dataset.v});
-$("images").onchange=()=>{$("preview").innerHTML="";[...$("images").files].slice(0,10).forEach(f=>{const img=document.createElement("img");img.src=URL.createObjectURL(f);$("preview").appendChild(img)})};
-
-async function check(){const r=await fetch("/api/admin/me");const d=await r.json();$("login").classList.toggle("hidden",d.admin);$("dashboard").classList.toggle("hidden",!d.admin);if(d.admin)loadList()}
-async function login(){const r=await fetch("/api/admin/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:$("user").value,password:$("pass").value})});const d=await r.json();if(!r.ok){$("loginMsg").textContent=d.message;return}check()}
-async function logout(){await fetch("/api/admin/logout",{method:"POST"});location.reload()}
-$("form").onsubmit=async e=>{e.preventDefault();if($("images").files.length>10){$("formMsg").textContent="Maximum 10 images allowed.";return}const r=await fetch("/api/admin/properties",{method:"POST",body:new FormData($("form"))});const d=await r.json();$("formMsg").textContent=d.message||"Property published successfully.";if(r.ok){$("form").reset();$("dealType").value="Fresh Booking";$("preview").innerHTML="";document.querySelectorAll("#deal button").forEach((x,i)=>x.classList.toggle("active",i===0));loadList()}};
-async function loadList(){const r=await fetch("/api/admin/properties");const data=await r.json();$("list").innerHTML=data.length?data.map(p=>`<div class="property-row"><img class="thumb" src="${p.images?.[0]?.url||""}"><div><div class="row-title">${esc(p.title)}</div><div class="row-meta">${esc(p.dealType)} • ${esc(p.city)} • ${esc(p.price)}</div><div class="status">${esc(p.status)}</div></div><div class="actions"><button class="small" onclick="setStatus('${p.id}','published')">Publish</button><button class="small" onclick="setStatus('${p.id}','draft')">Draft</button><button class="small danger" onclick="removeP('${p.id}')">Delete</button></div></div>`).join(""):"<p style='color:#888;font-size:11px'>No properties yet.</p>"}
-async function setStatus(id,status){await fetch("/api/admin/properties/"+id+"/status",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({status})});loadList()}
-async function removeP(id){if(!confirm("Delete this property and its images?"))return;await fetch("/api/admin/properties/"+id,{method:"DELETE"});loadList()}
-function esc(v){return String(v??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]))}
-check();
-</script></body></html>
-''', encoding="utf-8")
-
-# ---------------- README ----------------
-(root/"README.md").write_text(r'''# MONEYLAND Portal — V1
-
-This version implements the core workflow requested:
-
-ADMIN PORTAL
-→ choose Fresh Booking / Resale / Rental
-→ enter property details
-→ upload up to 10 images
-→ Publish
-→ property immediately becomes available on the main website API
-
-PUBLIC WEBSITE
-→ simple large hero
-→ Fresh Booking / Resale / Rental selector
-→ search
-→ latest property cards
-→ property detail page
-→ About / Team / Careers / Contact sections
-
-## Run locally
-
-1. Install Node.js.
-2. Open terminal in this folder.
-3. Run:
-
-```bash
-npm install
-node server.js
