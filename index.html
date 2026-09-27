@@ -1,724 +1,493 @@
-<!DOCTYPE html>
+from pathlib import Path
+
+html = r'''<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Moneyland - Gurgaon Property Feed</title>
-  
-  <!-- External Google Fonts -->
-  <link href="https://googleapis.com" rel="stylesheet">
-
+  <title>MONEYLAND — Gurgaon Property Feed</title>
+  <meta name="description" content="MONEYLAND — verified property listings, reels and premium real-estate membership." />
   <style>
-    /* ==========================================================================
-       GLOBAL RESET & THEMING
-       ========================================================================== */
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-      scroll-behavior: smooth;
+    :root{
+      --bg:#09090b;
+      --panel:#101014;
+      --panel2:#141419;
+      --line:#29252f;
+      --purple:#9b3cff;
+      --purple2:#c75cff;
+      --text:#f5f3f8;
+      --muted:#a5a1ac;
+      --green:#58d46f;
+      --radius:10px;
     }
 
-    body {
-      font-family: 'Poppins', sans-serif;
-      background: #09080e;
-      color: #ffffff;
-      overflow-x: hidden;
+    *{box-sizing:border-box}
+    html,body{margin:0;min-height:100%;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
+    button,input,select{font:inherit}
+    button{cursor:pointer}
+
+    body{
+      background:
+        radial-gradient(900px 420px at 80% 34%, rgba(133,35,255,.16), transparent 60%),
+        radial-gradient(650px 350px at 18% 37%, rgba(75,22,125,.13), transparent 65%),
+        var(--bg);
     }
 
-    /* ==========================================================================
-       1. NAVIGATION BAR
-       ========================================================================== */
-    header {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      padding: 20px 50px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      background: rgba(13, 11, 20, 0.95);
-      backdrop-filter: blur(14px);
-      z-index: 1000;
-      transition: 0.4s ease;
-      border-bottom: 1px solid #1f1a2e;
+    .site{
+      min-height:100vh;
+      max-width:1500px;
+      margin:auto;
     }
 
-    header.sticky {
-      padding: 14px 50px;
-      background: #0d0b14;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+    header{
+      height:76px;
+      display:flex;
+      align-items:center;
+      gap:34px;
+      padding:0 28px;
+      background:rgba(8,8,10,.94);
+      border-bottom:1px solid #19171d;
+      position:sticky;
+      top:0;
+      z-index:20;
+      backdrop-filter:blur(16px);
     }
 
-    .logo-box {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      cursor: pointer;
+    .brand{
+      display:flex;
+      align-items:center;
+      gap:9px;
+      min-width:185px;
+      font-size:20px;
+      font-weight:800;
+      letter-spacing:-.7px;
+    }
+    .brand-mark{
+      width:23px;height:23px;position:relative;display:grid;place-items:center;
+      transform:rotate(45deg);
+    }
+    .brand-mark span{
+      position:absolute;
+      width:13px;height:13px;
+      border:1px solid #a94cff;
+      background:#7b20d5;
+    }
+    .brand-mark span:nth-child(1){transform:translate(-5px,-5px);opacity:.85}
+    .brand-mark span:nth-child(2){transform:translate(5px,5px);opacity:.55}
+    .brand-mark span:nth-child(3){transform:translate(5px,-5px);background:#b84eff;opacity:.9}
+    .brand-mark span:nth-child(4){transform:translate(-5px,5px);background:#6e16c4;opacity:.9}
+
+    nav{display:flex;align-items:center;gap:25px;flex:1}
+    nav a{
+      color:#bcb7c2;text-decoration:none;font-size:12px;white-space:nowrap;
+      padding:29px 0 26px;border-bottom:2px solid transparent;
+    }
+    nav a.active{color:#d965ff;border-bottom-color:#a83cff}
+    nav a:hover{color:#fff}
+
+    .header-actions{display:flex;gap:10px;align-items:center}
+    .icon-btn{
+      width:34px;height:34px;border:1px solid #5b3a70;border-radius:7px;
+      background:#151019;color:#d8b5ff;display:grid;place-items:center;
+    }
+    .avatar{
+      width:34px;height:34px;border:2px solid #9e49e9;border-radius:50%;
+      background:#6b2aa0;display:grid;place-items:center;color:#160b20;
+    }
+    .avatar:before{
+      content:"";width:9px;height:9px;border-radius:50%;background:#d69bff;
+      position:absolute;margin-top:-10px;
+    }
+    .avatar:after{
+      content:"";width:17px;height:8px;border-radius:10px 10px 7px 7px;background:#d69bff;
+      margin-top:12px;
     }
 
-    .logo-icon {
-      color: #a855f7;
-      font-size: 22px;
-      text-shadow: 0 0 10px rgba(168, 85, 247, 0.6);
+    .hero{
+      position:relative;
+      padding:18px 28px 20px;
+      overflow:hidden;
+      border-bottom:1px solid #17151a;
+      background:
+        linear-gradient(180deg, rgba(19,9,27,.8), rgba(11,9,13,.94)),
+        radial-gradient(500px 180px at 82% 20%, rgba(155,60,255,.34), transparent 70%);
+    }
+    .hero:before,.hero:after{
+      content:"";position:absolute;inset:auto;
+      width:140px;height:140px;border:1px solid rgba(182,83,255,.38);
+      transform:rotate(45deg);
+      right:65px;top:-78px;
+      box-shadow:0 0 55px rgba(155,60,255,.22);
+    }
+    .hero:after{right:125px;top:-115px;width:115px;height:115px;opacity:.5}
+
+    .hero-inner{position:relative;z-index:2;max-width:980px;margin:auto;text-align:center}
+    .hero h1{font-size:27px;line-height:1.1;margin:0 0 6px;font-weight:800;letter-spacing:-.9px}
+    .hero p{margin:0 0 17px;color:#d35cff;font-size:13px;font-weight:600}
+
+    .search-row{
+      display:grid;
+      grid-template-columns:minmax(260px,1fr) 92px 100px 96px 110px;
+      gap:7px;
+    }
+    .search-box,.filter,.search-btn{
+      height:36px;border-radius:8px;border:1px solid #40334c;
+      background:#141218;color:#c4becb;
+    }
+    .search-box{
+      display:flex;align-items:center;text-align:left;padding:0 12px;gap:9px;font-size:11px;
+      box-shadow:inset 0 0 0 1px rgba(155,60,255,.06);
+    }
+    .search-box .glass{font-size:14px;color:#b0a9b7}
+    .filter{padding:0 9px;font-size:10px;text-align:left}
+    .search-btn{
+      border-color:#a43cff;background:linear-gradient(135deg,#9130ee,#aa43ed);
+      color:#fff;font-weight:700;font-size:11px;box-shadow:0 5px 18px rgba(139,42,235,.22);
     }
 
-    .logo-text h2 {
-      font-size: 20px;
-      font-weight: 700;
-      letter-spacing: 1px;
+    main{padding:20px 28px 30px}
+    .content-grid{
+      display:grid;
+      grid-template-columns:160px minmax(0,1fr) 170px;
+      gap:25px;
+      align-items:start;
+      max-width:1260px;
+      margin:auto;
     }
 
-    nav {
-      display: flex;
-      align-items: center;
-      gap: 24px;
+    .section-head{
+      display:flex;justify-content:space-between;align-items:center;margin:0 0 13px;
+    }
+    .section-head h2{font-size:16px;margin:0;font-weight:800}
+    .count{font-size:9px;color:#c85aff}
+
+    .reels{display:flex;flex-direction:column;gap:9px}
+    .reel{
+      background:#101014;border:1px solid #27242b;border-radius:6px;padding:6px;
+      overflow:hidden;
+    }
+    .reel-img{
+      height:79px;border-radius:5px;position:relative;overflow:hidden;
+      background:
+        linear-gradient(130deg, rgba(0,0,0,.08),rgba(0,0,0,.48)),
+        linear-gradient(140deg,#4d4d50,#b9aaa0 46%,#4e403a 47%,#29292c);
+    }
+    .reel-img:before{
+      content:"";position:absolute;inset:0;
+      background:linear-gradient(135deg,transparent 25%,rgba(255,255,255,.17) 26%,transparent 27%);
+      opacity:.5;
+    }
+    .play{
+      position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+      width:27px;height:27px;border-radius:50%;background:#9d37f0;
+      display:grid;place-items:center;color:#fff;font-size:12px;padding-left:2px;
+    }
+    .reel strong{font-size:9px;line-height:1.25;display:block;margin:7px 2px 4px}
+    .reel small{font-size:8px;color:#aaa4af;display:block;margin:0 2px 6px}
+    .tag{
+      display:inline-block;font-size:7px;padding:2px 5px;border-radius:4px;
+      color:#c86aff;background:#251330;border:1px solid #55216e;
     }
 
-    nav a {
-      position: relative;
-      font-size: 14px;
-      font-weight: 500;
-      color: #9ca3af;
-      text-decoration: none;
-      transition: 0.3s ease;
+    .listings{
+      min-width:0;
+    }
+    .cards{
+      display:grid;
+      grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:9px;
+    }
+    .card{
+      background:linear-gradient(180deg,#17171b,#111115);
+      border:1px solid #2a272d;border-radius:7px;overflow:hidden;
+      transition:.2s transform,.2s border-color;
+    }
+    .card:hover{transform:translateY(-2px);border-color:#6e368e}
+    .card-img{
+      height:102px;position:relative;
+      background:
+        linear-gradient(180deg,transparent 45%,rgba(0,0,0,.4)),
+        linear-gradient(135deg,#a7a6a1 0%,#ddd7c8 32%,#81786e 33%,#242426 34%,#56504a 72%,#ddd8ca 73%,#8b837c);
+    }
+    .card:nth-child(2) .card-img{background:linear-gradient(135deg,#cfc3ae,#8c7e6c 32%,#303031 33%,#69635d 67%,#d7d0c1)}
+    .card:nth-child(3) .card-img{background:linear-gradient(135deg,#bab6ae,#ddd8ce 30%,#57534d 31%,#1d1e20 66%,#b9b4ab)}
+    .card:nth-child(4) .card-img{background:linear-gradient(135deg,#e1ded6,#a79d91 33%,#46413d 34%,#d7d1c6 68%,#80766b)}
+    .card:nth-child(5) .card-img{background:linear-gradient(135deg,#8f8d89,#d6d1c5 35%,#464543 36%,#8c8982 70%,#d0c9bc)}
+    .card:nth-child(6) .card-img{background:linear-gradient(135deg,#a7a299,#d7d1c4 30%,#575650 31%,#c5c0b6 70%,#77736b)}
+    .verified{
+      position:absolute;left:7px;top:7px;background:#8d2be5;color:#fff;
+      border-radius:3px;padding:3px 5px;font-size:7px;font-weight:800;
+    }
+    .card-body{padding:8px}
+    .card-title{font-size:10px;font-weight:800;margin:0 0 4px}
+    .meta{font-size:8px;color:#b5b0b9;margin:2px 0}
+    .price{font-size:12px;font-weight:800;margin:4px 0}
+    .sub{font-size:7.5px;color:#a39da8}
+    .card-footer{display:flex;align-items:center;justify-content:space-between;margin-top:8px}
+    .interest{font-size:7px;color:#a7a1aa}
+    .details{
+      font-size:8px;border:1px solid #8d35c1;background:#1b1120;color:#c45bff;
+      border-radius:4px;padding:5px 8px;
     }
 
-    nav a.active, nav a:hover {
-      color: #a855f7;
+    .membership{
+      background:linear-gradient(180deg,#251133,#150c1d);
+      border:1px solid #6b2c8c;border-radius:7px;padding:13px 10px;
+      box-shadow:0 12px 45px rgba(103,26,149,.13);
+    }
+    .crown{text-align:center;font-size:23px;margin:0 0 4px}
+    .membership h3{text-align:center;font-size:11px;margin:0 0 5px}
+    .membership .pay{text-align:center;font-size:15px;font-weight:900;margin:0 0 2px}
+    .membership .once{text-align:center;font-size:8px;color:#d6a8e9}
+    .join{
+      display:block;width:100%;border:0;border-radius:5px;background:#a33eea;
+      color:#fff;font-size:9px;font-weight:800;padding:8px;margin:12px 0 14px;
+    }
+    .benefits{border-top:1px solid #4c2b59;padding-top:10px}
+    .benefits h4{font-size:9px;color:#bf58f2;margin:0 0 8px}
+    .benefits div{font-size:8px;color:#ddd4e1;margin:7px 0}
+    .check{color:#b349ee;margin-right:4px}
+    .trusted{
+      border-top:1px solid #4c2b59;margin-top:10px;padding-top:9px;
+      font-size:7px;color:#aaa1ae;text-align:center
     }
 
-    nav a::after {
-      content: "";
-      position: absolute;
-      left: 0;
-      bottom: -6px;
-      width: 0%;
-      height: 2px;
-      background: #a855f7;
-      transition: 0.3s ease;
+    .toast{
+      position:fixed;right:18px;bottom:18px;display:none;
+      background:#1b1220;border:1px solid #713594;color:#e8d6f0;
+      padding:11px 14px;border-radius:7px;font-size:11px;z-index:50;
+      box-shadow:0 12px 30px rgba(0,0,0,.45)
     }
 
-    nav a.active::after, nav a:hover::after {
-      width: 100%;
+    @media(max-width:1050px){
+      nav{gap:14px}
+      .content-grid{grid-template-columns:145px minmax(0,1fr)}
+      .membership{grid-column:1/-1}
+      .membership{display:grid;grid-template-columns:1fr 2fr 1fr;gap:12px;align-items:center}
+      .benefits{border-top:0;border-left:1px solid #4c2b59;padding:0 0 0 12px}
+      .trusted{border:0;margin:0}
+    }
+    @media(max-width:800px){
+      header{height:auto;min-height:68px;padding:12px 16px;flex-wrap:wrap;gap:10px}
+      .brand{min-width:auto}
+      nav{order:3;flex-basis:100%;overflow:auto}
+      nav a{padding:7px 0}
+      .header-actions{margin-left:auto}
+      .hero{padding:18px 16px}
+      .search-row{grid-template-columns:1fr 1fr}
+      .search-box{grid-column:1/-1}
+      main{padding:16px}
+      .content-grid{grid-template-columns:1fr}
+      .reels{display:grid;grid-template-columns:repeat(3,1fr)}
+      .reel-img{height:90px}
+      .membership{display:block}
+      .benefits{border-top:1px solid #4c2b59;border-left:0;padding:10px 0 0}
+      .trusted{border-top:1px solid #4c2b59;margin-top:10px;padding-top:9px}
+    }
+    @media(max-width:540px){
+      .cards{grid-template-columns:1fr}
+      .reels{grid-template-columns:1fr 1fr}
+      .hero h1{font-size:22px}
+      .search-row{grid-template-columns:1fr}
+      .search-box{grid-column:auto}
+      .filter,.search-btn{width:100%}
+      .content-grid{gap:16px}
+    }
+  </style>
+</head>
+<body>
+  <div class="site">
+    <header>
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+        <span>MONEYLAND</span>
+      </div>
+
+      <nav aria-label="Main navigation">
+        <a class="active" href="#">New Booking</a>
+        <a href="#">Resale</a>
+        <a href="#">Commercial</a>
+        <a href="#">Residential</a>
+        <a href="#">Plots</a>
+        <a href="#">Villa</a>
+        <a href="#">Farm</a>
+        <a href="#">Office</a>
+      </nav>
+
+      <div class="header-actions">
+        <button class="icon-btn" title="Wishlist">♡</button>
+        <button class="icon-btn" title="Notifications">♧</button>
+        <button class="avatar" title="Profile" aria-label="Profile"></button>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div class="hero-inner">
+        <h1>Gurgaon Property Feed</h1>
+        <p>Discover verified properties • 1,240+ active listings in Gurgaon</p>
+
+        <div class="search-row">
+          <div class="search-box">
+            <span class="glass">⌕</span>
+            <span>Search by locality, sector, builder, project or property ID...</span>
+          </div>
+          <button class="filter">Gurgaon ↕</button>
+          <button class="filter">Budget: ₹50L - ₹25Cr ↕</button>
+          <button class="filter">BHK: 2,3,4 ↕</button>
+          <button class="search-btn" onclick="showToast('Showing verified properties')">Search Properties</button>
+        </div>
+      </div>
+    </section>
+
+    <main>
+      <div class="content-grid">
+        <aside>
+          <div class="section-head">
+            <h2 style="font-size:10px">InShorts • PROPERTY REELS</h2>
+            <span style="color:#b442ff">ϟ</span>
+          </div>
+          <div class="reels">
+            <article class="reel">
+              <div class="reel-img"><div class="play">▶</div></div>
+              <strong>3 BHK in DLF Phase 4 • 1800 sqft</strong>
+              <small>Ready to move • 2.1Cr • 12 ago</small>
+              <span class="tag">TRENDING</span>
+            </article>
+            <article class="reel">
+              <div class="reel-img"></div>
+              <strong>4 BHK Villa in Sohna Road • 3500 sqft</strong>
+              <small>Gated community • 3.5Cr • 5 ago</small>
+              <span class="tag">TRENDING</span>
+            </article>
+            <article class="reel">
+              <div class="reel-img"></div>
+              <strong>Office Space in Sector 44 • 1200 sqft</strong>
+              <small>Fully Furnished • 85K/mo • 1h ago</small>
+              <span class="tag">TRENDING</span>
+            </article>
+          </div>
+        </aside>
+
+        <section class="listings">
+          <div class="section-head">
+            <h2>Verified Property Listings</h2>
+            <span class="count">312 results • Sorted by: Recommended ↓</span>
+          </div>
+
+          <div class="cards">
+            <article class="card">
+              <div class="card-img"><span class="verified">VERIFIED OWNER</span></div>
+              <div class="card-body">
+                <h3 class="card-title">3 BHK Apartment • 1650 sqft</h3>
+                <div class="meta">DLF Phase 3, Gurgaon</div>
+                <div class="price">₹1.25 Cr</div>
+                <div class="sub">3 Bed • 3 Bath • 5th Floor • Ready to move</div>
+                <div class="card-footer"><span class="interest">Listed 2 days ago • 24 people interested</span><button class="details" onclick="showToast('Property details opened')">View Details</button></div>
+              </div>
+            </article>
+
+            <article class="card">
+              <div class="card-img"><span class="verified">VERIFIED OWNER</span></div>
+              <div class="card-body">
+                <h3 class="card-title">4 BHK Villa • 2800 sqft</h3>
+                <div class="meta">Sohna Road, Gurgaon</div>
+                <div class="price">₹3.80 Cr</div>
+                <div class="sub">4 Bed • 4 Bath • Park Facing • Possession: Ready</div>
+                <div class="card-footer"><span class="interest">Listed 5 days ago • 18 interested</span><button class="details" onclick="showToast('Property details opened')">View Details</button></div>
+              </div>
+            </article>
+
+            <article class="card">
+              <div class="card-img"><span class="verified">VERIFIED OWNER</span></div>
+              <div class="card-body">
+                <h3 class="card-title">Commercial Office • 1100 sqft</h3>
+                <div class="meta">Sector 44, Gurgaon</div>
+                <div class="price">₹92 Lakh</div>
+                <div class="sub">Furnished • 1st Floor • Metro 1.2km</div>
+                <div class="card-footer"><span class="interest">Listed 1 week ago • 9 interested</span><button class="details" onclick="showToast('Property details opened')">View Details</button></div>
+              </div>
+            </article>
+
+            <article class="card">
+              <div class="card-img"><span class="verified">VERIFIED OWNER</span></div>
+              <div class="card-body">
+                <h3 class="card-title">Residential Plot • 200 sqyd</h3>
+                <div class="meta">Sector 70A, Gurgaon</div>
+                <div class="price">₹1.10 Cr</div>
+                <div class="sub">Corner Plot • Gated Colony • North Facing</div>
+                <div class="card-footer"><span class="interest">Listed 3 days ago • 31 interested</span><button class="details" onclick="showToast('Property details opened')">View Details</button></div>
+              </div>
+            </article>
+
+            <article class="card">
+              <div class="card-img"><span class="verified">VERIFIED OWNER</span></div>
+              <div class="card-body">
+                <h3 class="card-title">3 BHK Premium Floor • 1850 sqft</h3>
+                <div class="meta">Golf Course Extension Road</div>
+                <div class="price">₹2.05 Cr</div>
+                <div class="sub">3 Bed • 3 Bath • Low density • New booking</div>
+                <div class="card-footer"><span class="interest">Listed today • 42 interested</span><button class="details" onclick="showToast('Property details opened')">View Details</button></div>
+              </div>
+            </article>
+
+            <article class="card">
+              <div class="card-img"><span class="verified">VERIFIED OWNER</span></div>
+              <div class="card-body">
+                <h3 class="card-title">Luxury Villa • 4200 sqft</h3>
+                <div class="meta">Sector 58, Gurgaon</div>
+                <div class="price">₹5.25 Cr</div>
+                <div class="sub">4 Bed • Private Garden • Club Access</div>
+                <div class="card-footer"><span class="interest">Listed today • 16 interested</span><button class="details" onclick="showToast('Property details opened')">View Details</button></div>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <aside class="membership">
+          <div>
+            <div class="crown">♛</div>
+            <h3>Lifetime Membership</h3>
+            <div class="pay">PAY ₹1,00,000</div>
+            <div class="once">• LIFETIME ZERO BROKERAGE</div>
+            <button class="join" onclick="showToast('Membership flow started')">Join Now →</button>
+          </div>
+
+          <div class="benefits">
+            <h4>Membership Benefits</h4>
+            <div><span class="check">●</span>Zero brokerage on all deals</div>
+            <div><span class="check">●</span>Exclusive pre-launch deals</div>
+            <div><span class="check">●</span>Priority home loan assistance</div>
+            <div><span class="check">●</span>Legal & paperwork support</div>
+          </div>
+
+          <div class="trusted">Trusted by <strong>5,000+ Members</strong><br/>● ● ● ● ●</div>
+        </aside>
+      </div>
+    </main>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script>
+    function showToast(message){
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.style.display = 'block';
+      clearTimeout(window.__toastTimer);
+      window.__toastTimer = setTimeout(() => toast.style.display = 'none', 1800);
     }
 
-    .nav-right-actions {
-      display: flex;
-      align-items: center;
-      gap: 20px;
-    }
-
-    .action-icon {
-      background: none;
-      border: none;
-      color: #9ca3af;
-      font-size: 18px;
-      cursor: pointer;
-      transition: 0.2s;
-    }
-
-    .action-icon:hover {
-      color: #fff;
-    }
-
-    .profile-avatar {
-      width: 34px;
-      height: 34px;
-      background-color: #3b2e5c;
-      border: 1px solid #a855f7;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 13px;
-      font-weight: bold;
-      cursor: pointer;
-    }
-
-    /* ==========================================================================
-       2. HERO & FEED FILTERS
-       ========================================================================== */
-    .hero {
-      padding-top: 130px;
-      padding-bottom: 45px;
-      background: linear-gradient(to bottom, #170e2b, #0d071a, #09080e);
-      border-bottom: 1px solid #1f1a2e;
-      text-align: center;
-      position: relative;
-    }
-
-    .hero-content {
-      max-width: 1000px;
-      margin: 0 auto;
-      padding: 0 20px;
-      animation: fadeUp 1s ease;
-    }
-
-    .hero-content h1 {
-      font-size: 38px;
-      font-weight: 700;
-      margin-bottom: 6px;
-      letter-spacing: -0.5px;
-    }
-
-    .hero-content p {
-      font-size: 14px;
-      color: #9ca3af;
-      margin-bottom: 30px;
-    }
-
-    .hero-content p span {
-      color: #a855f7;
-      font-weight: 600;
-    }
-
-    .search-bar {
-      background: #120e1f;
-      padding: 10px;
-      border-radius: 12px;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      align-items: center;
-      border: 1px solid #2b2244;
-      box-shadow: 0 20px 30px rgba(0, 0, 0, 0.6);
-    }
-
-    .search-input-wrapper {
-      flex: 1;
-      min-width: 320px;
-      background: #1a142e;
-      border-radius: 8px;
-      padding: 12px 15px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .search-input-wrapper input {
-      background: transparent;
-      border: none;
-      outline: none;
-      color: #fff;
-      font-size: 14px;
-      width: 100%;
-    }
-
-    .search-input-wrapper input::placeholder {
-      color: #6b7280;
-    }
-
-    .filter-group {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-
-    .search-bar select {
-      background: #1a142e;
-      border: 1px solid #2b2244;
-      color: #d1d5db;
-      font-size: 13px;
-      padding: 12px 16px;
-      border-radius: 8px;
-      outline: none;
-      cursor: pointer;
-    }
-
-    .search-bar button {
-      background: #a855f7;
-      color: #fff;
-      font-weight: 700;
-      padding: 12px 26px;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-      white-space: nowrap;
-      transition: 0.2s;
-    }
-
-    .search-bar button:hover {
-      background: #9333ea;
-    }
-
-    /* ==========================================================================
-       3. DASHBOARD MAIN 3-COLUMN LAYOUT
-       ========================================================================== */
-    .dashboard-container {
-      max-width: 1400px;
-      margin: 0 auto;
-      padding: 40px 20px;
-      display: grid;
-      grid-template-columns: 2.8fr 6.4fr 2.8fr;
-      gap: 25px;
-    }
-
-    .panel-title {
-      font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-      color: #6b7280;
-      letter-spacing: 1px;
-      margin-bottom: 20px;
-    }
-
-    /* COLUMN 1: PROPERTY VISUAL REELS */
-    .feed-card {
-      background: #0e0c15;
-      border: 1px solid #1f1a2e;
-      border-radius: 12px;
-      padding: 12px;
-      margin-bottom: 16px;
-      cursor: pointer;
-      transition: border-color 0.3s;
-    }
-
-    .feed-card:hover {
-      border-color: #a855f7;
-    }
-
-    .feed-thumb {
-      height: 120px;
-      background: #1a1528;
-      border-radius: 8px;
-      margin-bottom: 10px;
-      position: relative;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .play-badge {
-      font-size: 16px;
-      background: rgba(168, 85, 247, 0.7);
-      width: 38px;
-      height: 38px;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      box-shadow: 0 0 15px rgba(168, 85, 247, 0.5);
-    }
-
-    .feed-info h4 {
-      font-size: 13px;
-      font-weight: 600;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .feed-info p {
-      font-size: 11px;
-      color: #9ca3af;
-      margin-top: 2px;
-    }
-
-    /* COLUMN 2: VERIFIED LISTINGS FEED */
-    .listings-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 20px;
-    }
-
-    .listings-header h3 {
-      font-size: 20px;
-      font-weight: 700;
-    }
-
-    .matched-badge {
-      font-size: 11px;
-      color: #a855f7;
-      background: #120e24;
-      border: 1px solid #231b3a;
-      padding: 4px 12px;
-      border-radius: 6px;
-      font-weight: 600;
-    }
-
-    .property-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
-      gap: 20px;
-    }
-
-    .property-card {
-      background: #0e0c15;
-      border: 1px solid #211a33;
-      border-radius: 12px;
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      transition: 0.3s ease;
-    }
-
-    .property-card:hover {
-      border-color: #a855f7;
-      box-shadow: 0 10px 25px rgba(168, 85, 247, 0.15);
-    }
-
-    .card-img-slot {
-      height: 160px;
-      background: #1c1830;
-      position: relative;
-    }
-
-    .verified-tag {
-      position: absolute;
-      top: 12px;
-      left: 12px;
-      background: #a855f7;
-      font-size: 9px;
-      font-weight: 700;
-      padding: 4px 8px;
-      border-radius: 4px;
-      letter-spacing: 0.5px;
-    }
-
-    .card-body {
-      padding: 18px;
-    }
-
-    .card-body h4 {
-      font-size: 14px;
-      font-weight: 600;
-      margin-bottom: 5px;
-      color: #ffffff;
-    }
-
-    .card-body .loc {
-      font-size: 12px;
-      color: #9ca3af;
-      margin-bottom: 10px;
-    }
-
-    .card-body .price {
-      font-size: 19px;
-      font-weight: 700;
-      color: #a855f7;
-      margin-bottom: 12px;
-    }
-
-    .card-body .specs {
-      font-size: 11px;
-      color: #d1d5db;
-      background: #151124;
-      border: 1px solid #201936;
-      padding: 8px;
-      border-radius: 6px;
-      line-height: 1.4;
-    }
-
-    .card-footer {
-      padding: 14px 18px;
-      border-top: 1px solid #1a142b;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 11px;
-    }
-
-    .time-text {
-      color: #6b7280;
-    }
-
-    .action-btn {
-      background: none;
-      border: none;
-      color: #a855f7;
-      font-weight: 700;
-      cursor: pointer;
-      font-size: 12px;
-    }
-
-    .action-btn:hover {
-      text-decoration: underline;
-    }
-
-    /* COLUMN 3: EXCLUSIVE DEALS PANEL */
-    .membership-panel {
-      background: linear-gradient(to bottom, #241246, #0f0920);
-      border: 2px solid #a855f7;
-      border-radius: 16px;
-      padding: 26px;
-      text-align: center;
-      box-shadow: 0 25px 50px rgba(0, 0, 0, 0.4);
-    }
-
-    .crown {
-      font-size: 28px;
-      margin-bottom: 8px;
-    }
-
-    .membership-panel h4 {
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 1.5px;
-      text-transform: uppercase;
-      color: #e5e7eb;
-    }
-
-    .membership-panel h2 {
-      font-size: 22px;
-      font-weight: 800;
-      margin: 10px 0;
-      color: #ffffff;
-    }
-    
-    .zero-broker-badge {
-      font-size: 11px;
-      font-weight: 700;
-      color: #a855f7;
-      margin-bottom: 15px;
-      letter-spacing: 0.5px;
-    }
-    
-    .membership-panel p {
-      font-size: 12px;
-      color: #9ca3af;
-      margin-bottom: 22px;
-      line-height: 1.6;
-    }
-    
-    .join-now-btn {
-      width: 100%;
-      background: linear-gradient(90deg, #a855f7, #d946ef);
-      color: #fff;
-      border: none;
-      padding: 12px;
-      border-radius: 10px;
-      font-weight: 700;
-      font-size: 13px;
-      cursor: pointer;
-      margin-bottom: 25px;
-      transition: 0.3s;
-    }
-    
-    .join-now-btn:hover {
-      opacity: 0.9;
-    }
-    
-    .benefits-box {
-      text-align: left;
-      border-top: 1px solid #2b1c4b;
-      padding-top: 18px;
-    }
-    
-    .benefits-box h5 {
-      font-size: 11px;
-      color: #6b7280;
-      margin-bottom: 12px;
-      text-transform: uppercase;
-    }
-    
-    .benefit-line {
-      font-size: 12px;
-      color: #d1d5db;
-      margin-bottom: 10px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    
-    .check-mark {
-      color: #22c55e;
-      font-weight: bold;
-    }
-    
-    .trusted-widget {
-      background: #0e0c15;
-      border: 1px solid #1f1a30;
-      border-radius: 12px;
-      padding: 16px;
-      margin-top: 20px;
-    }
-    
-    .trusted-title {
-      font-size: 11px;
-      color: #6b7280;
-      font-weight: 700;
-      text-transform: uppercase;
-      margin-bottom: 12px;
-    }
-    
-    .avatar-group {
-      display: flex;
-      align-items: center;
-    }
-    
-    .mini-avatar {
-      width: 28px;
-      height: 28px;
-      border-radius: 50%;
-      background: #3b2e5c;
-      border: 2px solid #0e0c15;
-      font-size: 10px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: bold;
-      margin-left: -8px;
-    }
-    
-    .mini-avatar:first-child {
-      margin-left: 0;
-    }
-    
-    /* ==========================================================================
-    ANIMATIONS & RESPONSIVE CONTEXT
-    ========================================================================== */
-    
-    @keyframes fadeUp {
-      from { opacity: 0; transform: translateY(25px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-    
-    @media(max-width: 1150px) {
-      .dashboard-container {
-        grid-template-columns: 1fr;
-        gap: 35px;
-      }
-      header {
-        padding: 20px 30px;
-      }
-    }
-    
-    @media(max-width: 650px) {
-      nav {
-        display: none;
-      }
-      .search-bar {
-        flex-direction: column;
-      }
-      .search-input-wrapper, .filter-group, .search-bar button, .search-bar select {
-        width: 100%;
-      }
-    }
-    
-    
-    ◆MONEYLAND
-
-    
-    New Booking
-    Resale
-    Commercial
-    Residential
-    Plots
-    Villa
-    Farm
-    Office
-    
-    ❤️
-    🔔
-    U
-    
-    Gurgaon Property Feed
-    Discover verified properties • 1,240+ active listings in Gurgaon
-    🔍
-    
-    
-    Gurgaon
-    
-    Budget ₹50L - ₹5Cr
-    
-    BHK 2,3,4+
-    
-    Search Properties
-    
-    Visuals • Property Reels
-    
-    ▶
-    
-    3 BHK in DLF Phase 4 - 1800 sqft
-    
-    Ready to Move • ₹2.10 Cr
-    
-    ▶
-    
-    4 BHK Villa in Sohna Road - 3200 sqft
-    
-    Gated Community • ₹3.80 Cr
-    
-    ▶
-    
-    Office Space in Sector 44 - 1200 sqft
-    
-    Fully Furnished • 550/mo • On Main
-    
-    Verified Property Listings
-    🔍 112 results matched
-    
-    VERIFIED OWNER3 BHK Apartment • 1650 sqft
-    📍 DLF Phase 5, Gurgaon
-    ₹1.25 Cr
-    3 Bed • 3 Bath • 11th Floor • Ready to move
-    
-    Listed 2 days ago • 24 interested
-    View Details →
-    
-    
-    VERIFIED OWNER
-    
-    4 BHK Villa • 2800 sqft
-    📍 Sohna Road, Gurgaon
-    ₹3.80 Cr
-    4 Bed • 4 Bath • Park Facing • Ready
-    
-    Listed 5 days ago • 45 interested
-    View Details →
-    
-    
-    VERIFIED OWNER
-    Commercial Office • 1100 sqft
-    📍 Sector 44, Gurgaon
-    ₹92 Lakh
-    Furnished • Top Floor • Metro 1.2km
-    
-    Listed 1 week ago • 18 interested
-    View Details →
-
-    
-    VERIFIED OWNER
-    
-    
-    Residential Plot • 200 sqyd
-    📍 Sector 70A, Gurgaon
-    ₹1.10 Cr
-    Corner Plot • Gated Colony • North Facing
-    
-    Listed 3 days ago • 32 interested
-    View Details →
-    
-    Exclusive Deals
-    👑
-    Lifetime Membership
-    PAY ₹1,00,000 ONCE
-    ✨ LIFETIME ZERO BROKERAGE
-    Save lakhs in brokerage fees for lifetime on structural real estate deals. Direct property owner mappings.
-    Join Now ➔
-    
-    Membership Benefits
-    ✓ Zero Brokerage on all deals
-    ✓ Dedicated relationship manager
-    ✓ Priority home loan assistance
-    ✓ Legal & paperwork support
-    
-    Trusted by 5,000+ Members
-    
-    A
-    R
-    K
-    S
-    +
-    
-    
-    
-    
-    window.addEventListener("scroll", function() {
-      var header = document.getElementById("mainHeader");
-      header.classList.toggle("sticky", window.scrollY > 40);
+    document.querySelectorAll('nav a').forEach(link => {
+      link.addEventListener('click', e => {
+        e.preventDefault();
+        document.querySelectorAll('nav a').forEach(x => x.classList.remove('active'));
+        link.classList.add('active');
       });
+    });
+  </script>
+</body>
+</html>
+'''
+
+path = Path("/mnt/data/index.html")
+path.write_text(html, encoding="utf-8")
+print(f"Created: {path}")
