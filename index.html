@@ -1,486 +1,423 @@
-<!DOCTYPE html>
+from pathlib import Path
+import shutil, textwrap, os
+
+root = Path("/mnt/data/moneyland-portal-v1")
+if root.exists():
+    shutil.rmtree(root)
+(root/"public"/"admin").mkdir(parents=True)
+(root/"data").mkdir()
+(root/"uploads").mkdir()
+
+# ---------------- package.json ----------------
+(root/"package.json").write_text(r'''{
+  "name": "moneyland-portal",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1",
+    "express-session": "^1.18.1"
+  }
+}
+''', encoding="utf-8")
+
+(root/".env.example").write_text(r'''PORT=3000
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=CHANGE_THIS_PASSWORD
+SESSION_SECRET=CHANGE_THIS_TO_A_LONG_RANDOM_SECRET
+''', encoding="utf-8")
+
+# ---------------- seed db json ----------------
+(root/"data/properties.json").write_text("[]", encoding="utf-8")
+
+# ---------------- server ----------------
+(root/"server.js").write_text(r'''const express = require("express");
+const session = require("express-session");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
+const crypto = require("crypto");
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+const ROOT = __dirname;
+const PUBLIC = path.join(ROOT, "public");
+const DATA_DIR = path.join(ROOT, "data");
+const UPLOADS = path.join(ROOT, "uploads");
+const DB_FILE = path.join(DATA_DIR, "properties.json");
+
+for (const dir of [DATA_DIR, UPLOADS]) fs.mkdirSync(dir, {recursive:true});
+if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, "[]");
+
+app.use(express.json());
+app.use(express.urlencoded({extended:true}));
+app.use(session({
+  secret: process.env.SESSION_SECRET || "development-only-change-me",
+  resave: false,
+  saveUninitialized: false,
+  cookie: {httpOnly:true, sameSite:"lax", secure:false, maxAge: 8*60*60*1000}
+}));
+app.use("/uploads", express.static(UPLOADS));
+app.use(express.static(PUBLIC));
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UPLOADS),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${Date.now()}-${crypto.randomBytes(5).toString("hex")}${ext}`);
+  }
+});
+const upload = multer({
+  storage,
+  limits: {files:10, fileSize:8*1024*1024},
+  fileFilter: (_req,file,cb) => {
+    const ok = ["image/jpeg","image/png","image/webp"].includes(file.mimetype);
+    cb(ok ? null : new Error("Only JPG, PNG and WEBP images are allowed."), ok);
+  }
+});
+
+function readProperties(){
+  return JSON.parse(fs.readFileSync(DB_FILE,"utf8"));
+}
+function writeProperties(items){
+  fs.writeFileSync(DB_FILE, JSON.stringify(items,null,2));
+}
+function adminOnly(req,res,next){
+  if (!req.session.admin) return res.status(401).json({message:"Admin login required."});
+  next();
+}
+function clean(v){ return String(v ?? "").trim(); }
+
+app.get("/", (_req,res)=>res.sendFile(path.join(PUBLIC,"index.html")));
+app.get("/admin", (_req,res)=>res.sendFile(path.join(PUBLIC,"admin","index.html")));
+
+app.post("/api/admin/login", (req,res)=>{
+  const username = clean(req.body.username);
+  const password = clean(req.body.password);
+  const expectedUser = process.env.ADMIN_USERNAME || "admin";
+  const expectedPass = process.env.ADMIN_PASSWORD || "admin123";
+
+  if(username === expectedUser && password === expectedPass){
+    req.session.admin = true;
+    return res.json({ok:true});
+  }
+  return res.status(401).json({message:"Invalid admin credentials."});
+});
+
+app.post("/api/admin/logout", (req,res)=>{
+  req.session.destroy(()=>res.json({ok:true}));
+});
+
+app.get("/api/admin/me", (req,res)=>res.json({admin:!!req.session.admin}));
+
+// Public listing API: only published properties are returned.
+app.get("/api/properties", (req,res)=>{
+  let items = readProperties().filter(p=>p.status==="published");
+
+  const type = clean(req.query.type).toLowerCase();
+  const city = clean(req.query.city).toLowerCase();
+  const q = clean(req.query.q).toLowerCase();
+
+  if(type && type !== "all") items = items.filter(p=>p.dealType.toLowerCase()===type);
+  if(city) items = items.filter(p=>(p.city+" "+p.location).toLowerCase().includes(city));
+  if(q) items = items.filter(p=>
+    [p.title,p.city,p.location,p.description,p.propertyType].join(" ").toLowerCase().includes(q)
+  );
+
+  items.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  res.json(items);
+});
+
+app.get("/api/properties/:id", (req,res)=>{
+  const item = readProperties().find(p=>p.id===req.params.id && p.status==="published");
+  if(!item) return res.status(404).json({message:"Property not found."});
+  res.json(item);
+});
+
+// Admin APIs
+app.get("/api/admin/properties", adminOnly, (_req,res)=>{
+  const items = readProperties().sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  res.json(items);
+});
+
+app.post("/api/admin/properties", adminOnly, upload.array("images",10), (req,res)=>{
+  const body = req.body;
+  const dealTypes = ["Fresh Booking","Resale","Rental"];
+  if(!dealTypes.includes(clean(body.dealType)))
+    return res.status(400).json({message:"Choose Fresh Booking, Resale or Rental."});
+  if(!clean(body.title) || !clean(body.city) || !clean(body.price))
+    return res.status(400).json({message:"Title, city and price are required."});
+
+  const properties = readProperties();
+  const id = "ML" + Date.now().toString(36).toUpperCase();
+
+  const property = {
+    id,
+    title: clean(body.title),
+    dealType: clean(body.dealType),
+    propertyType: clean(body.propertyType) || "Residential",
+    city: clean(body.city),
+    location: clean(body.location),
+    price: clean(body.price),
+    area: clean(body.area),
+    bhk: clean(body.bhk),
+    bathrooms: clean(body.bathrooms),
+    possession: clean(body.possession),
+    description: clean(body.description),
+    status: body.status === "draft" ? "draft" : "published",
+    createdAt: new Date().toISOString(),
+    images: (req.files || []).map((f,i)=>({
+      url: `/uploads/${f.filename}`,
+      order:i+1,
+      originalName:f.originalname
+    }))
+  };
+
+  properties.push(property);
+  writeProperties(properties);
+  res.json({ok:true, property});
+});
+
+app.put("/api/admin/properties/:id/status", adminOnly, (req,res)=>{
+  const allowed = ["published","draft","sold","rented"];
+  const status = clean(req.body.status);
+  if(!allowed.includes(status)) return res.status(400).json({message:"Invalid status."});
+
+  const properties = readProperties();
+  const item = properties.find(p=>p.id===req.params.id);
+  if(!item) return res.status(404).json({message:"Property not found."});
+  item.status = status;
+  item.updatedAt = new Date().toISOString();
+  writeProperties(properties);
+  res.json({ok:true,property:item});
+});
+
+app.delete("/api/admin/properties/:id", adminOnly, (req,res)=>{
+  const properties = readProperties();
+  const index = properties.findIndex(p=>p.id===req.params.id);
+  if(index===-1) return res.status(404).json({message:"Property not found."});
+  const [removed] = properties.splice(index,1);
+  for(const img of removed.images || []){
+    const file = path.join(UPLOADS,path.basename(img.url));
+    if(fs.existsSync(file)) fs.unlinkSync(file);
+  }
+  writeProperties(properties);
+  res.json({ok:true});
+});
+
+app.use((err,_req,res,_next)=>{
+  console.error(err);
+  res.status(400).json({message:err.message || "Something went wrong."});
+});
+
+app.listen(PORT,()=>console.log(`MONEYLAND running: http://localhost:${PORT}`));
+''', encoding="utf-8")
+
+# ---------------- public index ----------------
+(root/"public/index.html").write_text(r'''<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MONEYLAND — Gurgaon Property Feed</title>
-  <meta name="description" content="MONEYLAND — verified property listings, reels and premium real-estate membership." />
-  <style>
-    :root{
-      --bg:#09090b;
-      --panel:#101014;
-      --panel2:#141419;
-      --line:#29252f;
-      --purple:#9b3cff;
-      --purple2:#c75cff;
-      --text:#f5f3f8;
-      --muted:#a5a1ac;
-      --green:#58d46f;
-      --radius:10px;
-    }
-
-    *{box-sizing:border-box}
-    html,body{margin:0;min-height:100%;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
-    button,input,select{font:inherit}
-    button{cursor:pointer}
-
-    body{
-      background:
-        radial-gradient(900px 420px at 80% 34%, rgba(133,35,255,.16), transparent 60%),
-        radial-gradient(650px 350px at 18% 37%, rgba(75,22,125,.13), transparent 65%),
-        var(--bg);
-    }
-
-    .site{
-      min-height:100vh;
-      max-width:1500px;
-      margin:auto;
-    }
-
-    header{
-      height:76px;
-      display:flex;
-      align-items:center;
-      gap:34px;
-      padding:0 28px;
-      background:rgba(8,8,10,.94);
-      border-bottom:1px solid #19171d;
-      position:sticky;
-      top:0;
-      z-index:20;
-      backdrop-filter:blur(16px);
-    }
-
-    .brand{
-      display:flex;
-      align-items:center;
-      gap:9px;
-      min-width:185px;
-      font-size:20px;
-      font-weight:800;
-      letter-spacing:-.7px;
-    }
-    .brand-mark{
-      width:23px;height:23px;position:relative;display:grid;place-items:center;
-      transform:rotate(45deg);
-    }
-    .brand-mark span{
-      position:absolute;
-      width:13px;height:13px;
-      border:1px solid #a94cff;
-      background:#7b20d5;
-    }
-    .brand-mark span:nth-child(1){transform:translate(-5px,-5px);opacity:.85}
-    .brand-mark span:nth-child(2){transform:translate(5px,5px);opacity:.55}
-    .brand-mark span:nth-child(3){transform:translate(5px,-5px);background:#b84eff;opacity:.9}
-    .brand-mark span:nth-child(4){transform:translate(-5px,5px);background:#6e16c4;opacity:.9}
-
-    nav{display:flex;align-items:center;gap:25px;flex:1}
-    nav a{
-      color:#bcb7c2;text-decoration:none;font-size:12px;white-space:nowrap;
-      padding:29px 0 26px;border-bottom:2px solid transparent;
-    }
-    nav a.active{color:#d965ff;border-bottom-color:#a83cff}
-    nav a:hover{color:#fff}
-
-    .header-actions{display:flex;gap:10px;align-items:center}
-    .icon-btn{
-      width:34px;height:34px;border:1px solid #5b3a70;border-radius:7px;
-      background:#151019;color:#d8b5ff;display:grid;place-items:center;
-    }
-    .avatar{
-      width:34px;height:34px;border:2px solid #9e49e9;border-radius:50%;
-      background:#6b2aa0;display:grid;place-items:center;color:#160b20;
-    }
-    .avatar:before{
-      content:"";width:9px;height:9px;border-radius:50%;background:#d69bff;
-      position:absolute;margin-top:-10px;
-    }
-    .avatar:after{
-      content:"";width:17px;height:8px;border-radius:10px 10px 7px 7px;background:#d69bff;
-      margin-top:12px;
-    }
-
-    .hero{
-      position:relative;
-      padding:18px 28px 20px;
-      overflow:hidden;
-      border-bottom:1px solid #17151a;
-      background:
-        linear-gradient(180deg, rgba(19,9,27,.8), rgba(11,9,13,.94)),
-        radial-gradient(500px 180px at 82% 20%, rgba(155,60,255,.34), transparent 70%);
-    }
-    .hero:before,.hero:after{
-      content:"";position:absolute;inset:auto;
-      width:140px;height:140px;border:1px solid rgba(182,83,255,.38);
-      transform:rotate(45deg);
-      right:65px;top:-78px;
-      box-shadow:0 0 55px rgba(155,60,255,.22);
-    }
-    .hero:after{right:125px;top:-115px;width:115px;height:115px;opacity:.5}
-
-    .hero-inner{position:relative;z-index:2;max-width:980px;margin:auto;text-align:center}
-    .hero h1{font-size:27px;line-height:1.1;margin:0 0 6px;font-weight:800;letter-spacing:-.9px}
-    .hero p{margin:0 0 17px;color:#d35cff;font-size:13px;font-weight:600}
-
-    .search-row{
-      display:grid;
-      grid-template-columns:minmax(260px,1fr) 92px 100px 96px 110px;
-      gap:7px;
-    }
-    .search-box,.filter,.search-btn{
-      height:36px;border-radius:8px;border:1px solid #40334c;
-      background:#141218;color:#c4becb;
-    }
-    .search-box{
-      display:flex;align-items:center;text-align:left;padding:0 12px;gap:9px;font-size:11px;
-      box-shadow:inset 0 0 0 1px rgba(155,60,255,.06);
-    }
-    .search-box .glass{font-size:14px;color:#b0a9b7}
-    .filter{padding:0 9px;font-size:10px;text-align:left}
-    .search-btn{
-      border-color:#a43cff;background:linear-gradient(135deg,#9130ee,#aa43ed);
-      color:#fff;font-weight:700;font-size:11px;box-shadow:0 5px 18px rgba(139,42,235,.22);
-    }
-
-    main{padding:20px 28px 30px}
-    .content-grid{
-      display:grid;
-      grid-template-columns:160px minmax(0,1fr) 170px;
-      gap:25px;
-      align-items:start;
-      max-width:1260px;
-      margin:auto;
-    }
-
-    .section-head{
-      display:flex;justify-content:space-between;align-items:center;margin:0 0 13px;
-    }
-    .section-head h2{font-size:16px;margin:0;font-weight:800}
-    .count{font-size:9px;color:#c85aff}
-
-    .reels{display:flex;flex-direction:column;gap:9px}
-    .reel{
-      background:#101014;border:1px solid #27242b;border-radius:6px;padding:6px;
-      overflow:hidden;
-    }
-    .reel-img{
-      height:79px;border-radius:5px;position:relative;overflow:hidden;
-      background:
-        linear-gradient(130deg, rgba(0,0,0,.08),rgba(0,0,0,.48)),
-        linear-gradient(140deg,#4d4d50,#b9aaa0 46%,#4e403a 47%,#29292c);
-    }
-    .reel-img:before{
-      content:"";position:absolute;inset:0;
-      background:linear-gradient(135deg,transparent 25%,rgba(255,255,255,.17) 26%,transparent 27%);
-      opacity:.5;
-    }
-    .play{
-      position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
-      width:27px;height:27px;border-radius:50%;background:#9d37f0;
-      display:grid;place-items:center;color:#fff;font-size:12px;padding-left:2px;
-    }
-    .reel strong{font-size:9px;line-height:1.25;display:block;margin:7px 2px 4px}
-    .reel small{font-size:8px;color:#aaa4af;display:block;margin:0 2px 6px}
-    .tag{
-      display:inline-block;font-size:7px;padding:2px 5px;border-radius:4px;
-      color:#c86aff;background:#251330;border:1px solid #55216e;
-    }
-
-    .listings{
-      min-width:0;
-    }
-    .cards{
-      display:grid;
-      grid-template-columns:repeat(2,minmax(0,1fr));
-      gap:9px;
-    }
-    .card{
-      background:linear-gradient(180deg,#17171b,#111115);
-      border:1px solid #2a272d;border-radius:7px;overflow:hidden;
-      transition:.2s transform,.2s border-color;
-    }
-    .card:hover{transform:translateY(-2px);border-color:#6e368e}
-    .card-img{
-      height:102px;position:relative;
-      background:
-        linear-gradient(180deg,transparent 45%,rgba(0,0,0,.4)),
-        linear-gradient(135deg,#a7a6a1 0%,#ddd7c8 32%,#81786e 33%,#242426 34%,#56504a 72%,#ddd8ca 73%,#8b837c);
-    }
-    .card:nth-child(2) .card-img{background:linear-gradient(135deg,#cfc3ae,#8c7e6c 32%,#303031 33%,#69635d 67%,#d7d0c1)}
-    .card:nth-child(3) .card-img{background:linear-gradient(135deg,#bab6ae,#ddd8ce 30%,#57534d 31%,#1d1e20 66%,#b9b4ab)}
-    .card:nth-child(4) .card-img{background:linear-gradient(135deg,#e1ded6,#a79d91 33%,#46413d 34%,#d7d1c6 68%,#80766b)}
-    .card:nth-child(5) .card-img{background:linear-gradient(135deg,#8f8d89,#d6d1c5 35%,#464543 36%,#8c8982 70%,#d0c9bc)}
-    .card:nth-child(6) .card-img{background:linear-gradient(135deg,#a7a299,#d7d1c4 30%,#575650 31%,#c5c0b6 70%,#77736b)}
-    .verified{
-      position:absolute;left:7px;top:7px;background:#8d2be5;color:#fff;
-      border-radius:3px;padding:3px 5px;font-size:7px;font-weight:800;
-    }
-    .card-body{padding:8px}
-    .card-title{font-size:10px;font-weight:800;margin:0 0 4px}
-    .meta{font-size:8px;color:#b5b0b9;margin:2px 0}
-    .price{font-size:12px;font-weight:800;margin:4px 0}
-    .sub{font-size:7.5px;color:#a39da8}
-    .card-footer{display:flex;align-items:center;justify-content:space-between;margin-top:8px}
-    .interest{font-size:7px;color:#a7a1aa}
-    .details{
-      font-size:8px;border:1px solid #8d35c1;background:#1b1120;color:#c45bff;
-      border-radius:4px;padding:5px 8px;
-    }
-
-    .membership{
-      background:linear-gradient(180deg,#251133,#150c1d);
-      border:1px solid #6b2c8c;border-radius:7px;padding:13px 10px;
-      box-shadow:0 12px 45px rgba(103,26,149,.13);
-    }
-    .crown{text-align:center;font-size:23px;margin:0 0 4px}
-    .membership h3{text-align:center;font-size:11px;margin:0 0 5px}
-    .membership .pay{text-align:center;font-size:15px;font-weight:900;margin:0 0 2px}
-    .membership .once{text-align:center;font-size:8px;color:#d6a8e9}
-    .join{
-      display:block;width:100%;border:0;border-radius:5px;background:#a33eea;
-      color:#fff;font-size:9px;font-weight:800;padding:8px;margin:12px 0 14px;
-    }
-    .benefits{border-top:1px solid #4c2b59;padding-top:10px}
-    .benefits h4{font-size:9px;color:#bf58f2;margin:0 0 8px}
-    .benefits div{font-size:8px;color:#ddd4e1;margin:7px 0}
-    .check{color:#b349ee;margin-right:4px}
-    .trusted{
-      border-top:1px solid #4c2b59;margin-top:10px;padding-top:9px;
-      font-size:7px;color:#aaa1ae;text-align:center
-    }
-
-    .toast{
-      position:fixed;right:18px;bottom:18px;display:none;
-      background:#1b1220;border:1px solid #713594;color:#e8d6f0;
-      padding:11px 14px;border-radius:7px;font-size:11px;z-index:50;
-      box-shadow:0 12px 30px rgba(0,0,0,.45)
-    }
-
-    @media(max-width:1050px){
-      nav{gap:14px}
-      .content-grid{grid-template-columns:145px minmax(0,1fr)}
-      .membership{grid-column:1/-1}
-      .membership{display:grid;grid-template-columns:1fr 2fr 1fr;gap:12px;align-items:center}
-      .benefits{border-top:0;border-left:1px solid #4c2b59;padding:0 0 0 12px}
-      .trusted{border:0;margin:0}
-    }
-    @media(max-width:800px){
-      header{height:auto;min-height:68px;padding:12px 16px;flex-wrap:wrap;gap:10px}
-      .brand{min-width:auto}
-      nav{order:3;flex-basis:100%;overflow:auto}
-      nav a{padding:7px 0}
-      .header-actions{margin-left:auto}
-      .hero{padding:18px 16px}
-      .search-row{grid-template-columns:1fr 1fr}
-      .search-box{grid-column:1/-1}
-      main{padding:16px}
-      .content-grid{grid-template-columns:1fr}
-      .reels{display:grid;grid-template-columns:repeat(3,1fr)}
-      .reel-img{height:90px}
-      .membership{display:block}
-      .benefits{border-top:1px solid #4c2b59;border-left:0;padding:10px 0 0}
-      .trusted{border-top:1px solid #4c2b59;margin-top:10px;padding-top:9px}
-    }
-    @media(max-width:540px){
-      .cards{grid-template-columns:1fr}
-      .reels{grid-template-columns:1fr 1fr}
-      .hero h1{font-size:22px}
-      .search-row{grid-template-columns:1fr}
-      .search-box{grid-column:auto}
-      .filter,.search-btn{width:100%}
-      .content-grid{gap:16px}
-    }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MONEYLAND | Property</title>
+<style>
+:root{--purple:#9d35e9;--pink:#c050ff;--bg:#09090b;--card:#111115;--line:#29242e;--muted:#99939f}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:#f8f5fa;font-family:Inter,system-ui,Arial,sans-serif}
+a{text-decoration:none;color:inherit}.container{width:min(1180px,92%);margin:auto}
+header{height:72px;border-bottom:1px solid #211d25;background:#09090cf2;backdrop-filter:blur(15px);position:sticky;top:0;z-index:50}
+.nav{height:100%;display:flex;align-items:center;justify-content:space-between}.logo{font-weight:900;font-size:21px;letter-spacing:-.8px;display:flex;align-items:center;gap:9px}.diamond{width:21px;height:21px;background:linear-gradient(135deg,#7122c7,#d258ff);transform:rotate(45deg);clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}
+nav{display:flex;gap:27px;align-items:center}nav a{font-size:12px;color:#b8b1bd}nav a:hover{color:#fff}.navbtn{padding:9px 14px;border:1px solid #64367b;border-radius:7px;color:#fff!important;background:#17101b}
+.hero{min-height:560px;display:grid;align-items:center;text-align:center;background:radial-gradient(600px 300px at 80% 25%,#8621ba30,transparent 70%),radial-gradient(500px 260px at 15% 50%,#4a187030,transparent 70%)}
+.eyebrow{color:#c053ff;font-size:11px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase}.hero h1{font-size:clamp(42px,6vw,72px);line-height:1;letter-spacing:-3px;max-width:850px;margin:16px auto}.hero h1 span{color:#bd4bff}.hero p{color:#aaa3ae;max-width:650px;margin:0 auto 28px;line-height:1.6;font-size:15px}
+.deal-picker{display:flex;justify-content:center;gap:8px;flex-wrap:wrap}.deal-picker button{padding:12px 20px;border:1px solid #45364c;background:#141117;color:#c8c1cc;border-radius:7px;cursor:pointer;font-weight:700}.deal-picker button.active,.deal-picker button:hover{background:#9633df;color:#fff;border-color:#b34cff}
+.search{margin:35px auto 0;display:flex;gap:8px;max-width:780px}.search input{flex:1;height:43px;border:1px solid #39313f;background:#121116;color:#fff;border-radius:7px;padding:0 14px}.search button{border:0;border-radius:7px;background:#9b35e5;color:#fff;padding:0 22px;font-weight:800}
+section{padding:70px 0}.section-title{text-align:center;margin-bottom:30px}.section-title h2{font-size:27px;margin:0 0 8px}.section-title p{color:var(--muted);font-size:12px}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:15px}.card{border:1px solid var(--line);background:var(--card);border-radius:9px;overflow:hidden}.pic{height:210px;background:#27252a;position:relative}.pic img{width:100%;height:100%;object-fit:cover}.badge{position:absolute;top:10px;left:10px;background:#9130dd;padding:5px 7px;border-radius:4px;font-size:9px;font-weight:800}.body{padding:13px}.body h3{font-size:14px;margin:0 0 6px}.muted{color:#9d97a3;font-size:10px}.price{font-size:17px;font-weight:900;margin:10px 0 5px}.empty{text-align:center;color:#88818c;border:1px dashed #302a34;padding:40px;border-radius:8px;grid-column:1/-1}
+.info{background:#0e0d10;border-top:1px solid #1e1b21;border-bottom:1px solid #1e1b21}.columns{display:grid;grid-template-columns:repeat(3,1fr);gap:35px}.columns h3{font-size:15px}.columns p{color:#9c96a1;font-size:12px;line-height:1.7}.team{display:grid;grid-template-columns:repeat(3,1fr);gap:15px}.person{background:#111014;border:1px solid #29242e;padding:25px;border-radius:9px}.person strong{display:block;margin-bottom:5px}.person small{color:#a39ca9}
+footer{padding:30px 0;border-top:1px solid #211d25;color:#85808a;font-size:10px}footer .container{display:flex;justify-content:space-between}
+@media(max-width:800px){nav{display:none}.cards,.columns,.team{grid-template-columns:1fr}.search{flex-direction:column}.search button{height:43px}.hero{min-height:610px}}
+</style>
 </head>
 <body>
-  <div class="site">
-    <header>
-      <div class="brand">
-        <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
-        <span>MONEYLAND</span>
-      </div>
+<header><div class="container nav">
+  <a class="logo" href="#"><i class="diamond"></i>MONEYLAND</a>
+  <nav>
+    <a href="#properties">Properties</a><a href="#about">About</a><a href="#team">Team</a><a href="#careers">Careers</a><a href="#contact">Contact</a>
+    <a class="navbtn" href="/admin">Admin Portal</a>
+  </nav>
+</div></header>
 
-      <nav aria-label="Main navigation">
-        <a class="active" href="#">New Booking</a>
-        <a href="#">Resale</a>
-        <a href="#">Commercial</a>
-        <a href="#">Residential</a>
-        <a href="#">Plots</a>
-        <a href="#">Villa</a>
-        <a href="#">Farm</a>
-        <a href="#">Office</a>
-      </nav>
-
-      <div class="header-actions">
-        <button class="icon-btn" title="Wishlist">♡</button>
-        <button class="icon-btn" title="Notifications">♧</button>
-        <button class="avatar" title="Profile" aria-label="Profile"></button>
-      </div>
-    </header>
-
-    <section class="hero">
-      <div class="hero-inner">
-        <h1>Gurgaon Property Feed</h1>
-        <p>Discover verified properties • 1,240+ active listings in Gurgaon</p>
-
-        <div class="search-row">
-          <div class="search-box">
-            <span class="glass">⌕</span>
-            <span>Search by locality, sector, builder, project or property ID...</span>
-          </div>
-          <button class="filter">Gurgaon ↕</button>
-          <button class="filter">Budget: ₹50L - ₹25Cr ↕</button>
-          <button class="filter">BHK: 2,3,4 ↕</button>
-          <button class="search-btn" onclick="showToast('Showing verified properties')">Search Properties</button>
-        </div>
-      </div>
-    </section>
-
-    <main>
-      <div class="content-grid">
-        <aside>
-          <div class="section-head">
-            <h2 style="font-size:10px">InShorts • PROPERTY REELS</h2>
-            <span style="color:#b442ff">ϟ</span>
-          </div>
-          <div class="reels">
-            <article class="reel">
-              <div class="reel-img"><div class="play">▶</div></div>
-              <strong>3 BHK in DLF Phase 4 • 1800 sqft</strong>
-              <small>Ready to move • 2.1Cr • 12 ago</small>
-              <span class="tag">TRENDING</span>
-            </article>
-            <article class="reel">
-              <div class="reel-img"></div>
-              <strong>4 BHK Villa in Sohna Road • 3500 sqft</strong>
-              <small>Gated community • 3.5Cr • 5 ago</small>
-              <span class="tag">TRENDING</span>
-            </article>
-            <article class="reel">
-              <div class="reel-img"></div>
-              <strong>Office Space in Sector 44 • 1200 sqft</strong>
-              <small>Fully Furnished • 85K/mo • 1h ago</small>
-              <span class="tag">TRENDING</span>
-            </article>
-          </div>
-        </aside>
-
-        <section class="listings">
-          <div class="section-head">
-            <h2>Verified Property Listings</h2>
-            <span class="count">312 results • Sorted by: Recommended ↓</span>
-          </div>
-
-          <div class="cards">
-            <article class="card">
-              <div class="card-img"><span class="verified">VERIFIED OWNER</span></div>
-              <div class="card-body">
-                <h3 class="card-title">3 BHK Apartment • 1650 sqft</h3>
-                <div class="meta">DLF Phase 3, Gurgaon</div>
-                <div class="price">₹1.25 Cr</div>
-                <div class="sub">3 Bed • 3 Bath • 5th Floor • Ready to move</div>
-                <div class="card-footer"><span class="interest">Listed 2 days ago • 24 people interested</span><button class="details" onclick="showToast('Property details opened')">View Details</button></div>
-              </div>
-            </article>
-
-            <article class="card">
-              <div class="card-img"><span class="verified">VERIFIED OWNER</span></div>
-              <div class="card-body">
-                <h3 class="card-title">4 BHK Villa • 2800 sqft</h3>
-                <div class="meta">Sohna Road, Gurgaon</div>
-                <div class="price">₹3.80 Cr</div>
-                <div class="sub">4 Bed • 4 Bath • Park Facing • Possession: Ready</div>
-                <div class="card-footer"><span class="interest">Listed 5 days ago • 18 interested</span><button class="details" onclick="showToast('Property details opened')">View Details</button></div>
-              </div>
-            </article>
-
-            <article class="card">
-              <div class="card-img"><span class="verified">VERIFIED OWNER</span></div>
-              <div class="card-body">
-                <h3 class="card-title">Commercial Office • 1100 sqft</h3>
-                <div class="meta">Sector 44, Gurgaon</div>
-                <div class="price">₹92 Lakh</div>
-                <div class="sub">Furnished • 1st Floor • Metro 1.2km</div>
-                <div class="card-footer"><span class="interest">Listed 1 week ago • 9 interested</span><button class="details" onclick="showToast('Property details opened')">View Details</button></div>
-              </div>
-            </article>
-
-            <article class="card">
-              <div class="card-img"><span class="verified">VERIFIED OWNER</span></div>
-              <div class="card-body">
-                <h3 class="card-title">Residential Plot • 200 sqyd</h3>
-                <div class="meta">Sector 70A, Gurgaon</div>
-                <div class="price">₹1.10 Cr</div>
-                <div class="sub">Corner Plot • Gated Colony • North Facing</div>
-                <div class="card-footer"><span class="interest">Listed 3 days ago • 31 interested</span><button class="details" onclick="showToast('Property details opened')">View Details</button></div>
-              </div>
-            </article>
-
-            <article class="card">
-              <div class="card-img"><span class="verified">VERIFIED OWNER</span></div>
-              <div class="card-body">
-                <h3 class="card-title">3 BHK Premium Floor • 1850 sqft</h3>
-                <div class="meta">Golf Course Extension Road</div>
-                <div class="price">₹2.05 Cr</div>
-                <div class="sub">3 Bed • 3 Bath • Low density • New booking</div>
-                <div class="card-footer"><span class="interest">Listed today • 42 interested</span><button class="details" onclick="showToast('Property details opened')">View Details</button></div>
-              </div>
-            </article>
-
-            <article class="card">
-              <div class="card-img"><span class="verified">VERIFIED OWNER</span></div>
-              <div class="card-body">
-                <h3 class="card-title">Luxury Villa • 4200 sqft</h3>
-                <div class="meta">Sector 58, Gurgaon</div>
-                <div class="price">₹5.25 Cr</div>
-                <div class="sub">4 Bed • Private Garden • Club Access</div>
-                <div class="card-footer"><span class="interest">Listed today • 16 interested</span><button class="details" onclick="showToast('Property details opened')">View Details</button></div>
-              </div>
-            </article>
-          </div>
-        </section>
-
-        <aside class="membership">
-          <div>
-            <div class="crown">♛</div>
-            <h3>Lifetime Membership</h3>
-            <div class="pay">PAY ₹1,00,000</div>
-            <div class="once">• LIFETIME ZERO BROKERAGE</div>
-            <button class="join" onclick="showToast('Membership flow started')">Join Now →</button>
-          </div>
-
-          <div class="benefits">
-            <h4>Membership Benefits</h4>
-            <div><span class="check">●</span>Zero brokerage on all deals</div>
-            <div><span class="check">●</span>Exclusive pre-launch deals</div>
-            <div><span class="check">●</span>Priority home loan assistance</div>
-            <div><span class="check">●</span>Legal & paperwork support</div>
-          </div>
-
-          <div class="trusted">Trusted by <strong>5,000+ Members</strong><br/>● ● ● ● ●</div>
-        </aside>
-      </div>
-    </main>
+<main>
+<section class="hero">
+ <div class="container">
+  <div class="eyebrow">Simple property discovery</div>
+  <h1>Find your next property, <span>your way.</span></h1>
+  <p>Fresh bookings, resale deals and rental properties — published directly by MONEYLAND.</p>
+  <div class="deal-picker" id="dealPicker">
+   <button class="active" data-type="all">All Properties</button>
+   <button data-type="Fresh Booking">Fresh Booking</button>
+   <button data-type="Resale">Resale</button>
+   <button data-type="Rental">Rental</button>
   </div>
+  <div class="search"><input id="search" placeholder="Search city, sector, project or property..."><button onclick="loadProperties()">Search</button></div>
+ </div>
+</section>
 
-  <div class="toast" id="toast"></div>
-  <script>
-    function showToast(message){
-      const toast = document.getElementById('toast');
-      toast.textContent = message;
-      toast.style.display = 'block';
-      clearTimeout(window.__toastTimer);
-      window.__toastTimer = setTimeout(() => toast.style.display = 'none', 1800);
-    }
+<section id="properties"><div class="container">
+ <div class="section-title"><h2>Latest Properties</h2><p>Every published property from the MONEYLAND admin portal appears here automatically.</p></div>
+ <div class="cards" id="cards"></div>
+</div></section>
 
-    document.querySelectorAll('nav a').forEach(link => {
-      link.addEventListener('click', e => {
-        e.preventDefault();
-        document.querySelectorAll('nav a').forEach(x => x.classList.remove('active'));
-        link.classList.add('active');
-      });
-    });
-  </script>
+<section id="about" class="info"><div class="container columns">
+ <div><h3>About MONEYLAND</h3><p>A property discovery platform built to bring fresh bookings, resale opportunities and rentals into one simple experience.</p></div>
+ <div><h3>For Owners & Builders</h3><p>Our admin portal is designed so your team can add a property, upload images and publish it to the main website without editing the frontend code.</p></div>
+ <div id="careers"><h3>Careers</h3><p>We are building a modern real-estate technology platform. Add your careers form and openings here as the business grows.</p></div>
+</div></section>
+
+<section id="team"><div class="container"><div class="section-title"><h2>Our Team</h2><p>People building the MONEYLAND property experience.</p></div>
+ <div class="team"><div class="person"><strong>Founder / Director</strong><small>MONEYLAND</small></div><div class="person"><strong>Property Operations</strong><small>Listings & verification</small></div><div class="person"><strong>Customer Experience</strong><small>Leads & support</small></div></div>
+</div></section>
+
+<section id="contact" class="info"><div class="container columns">
+ <div><h3>Contact</h3><p>For property enquiries, partnerships and business queries, connect with the MONEYLAND team.</p></div>
+ <div><h3>Office</h3><p>Add your official office address, phone and business hours here.</p></div>
+ <div><h3>Enquiries</h3><p>Add your official email and WhatsApp/contact details here.</p></div>
+</div></section>
+</main>
+<footer><div class="container"><span>© <span id="year"></span> MONEYLAND</span><span>Property • People • Possibilities</span></div></footer>
+
+<script>
+let selectedType="all";
+const cards=document.getElementById("cards");
+document.getElementById("year").textContent=new Date().getFullYear();
+document.querySelectorAll("#dealPicker button").forEach(b=>b.onclick=()=>{
+ document.querySelectorAll("#dealPicker button").forEach(x=>x.classList.remove("active"));
+ b.classList.add("active"); selectedType=b.dataset.type; loadProperties();
+});
+document.getElementById("search").addEventListener("keydown",e=>{if(e.key==="Enter")loadProperties()});
+
+async function loadProperties(){
+ const q=document.getElementById("search").value.trim();
+ const url=new URL("/api/properties",location.origin);
+ if(selectedType!=="all")url.searchParams.set("type",selectedType);
+ if(q)url.searchParams.set("q",q);
+ const res=await fetch(url); const data=await res.json();
+ if(!data.length){cards.innerHTML='<div class="empty">No published properties found for this selection.</div>';return}
+ cards.innerHTML=data.map(p=>`
+  <a class="card" href="/property.html?id=${encodeURIComponent(p.id)}">
+   <div class="pic">${p.images?.[0]?`<img src="${p.images[0].url}" alt="">`:''}<span class="badge">${p.dealType}</span></div>
+   <div class="body"><h3>${esc(p.title)}</h3><div class="muted">${esc(p.location)}, ${esc(p.city)}</div><div class="price">${esc(p.price)}</div><div class="muted">${esc(p.bhk||"")} ${p.area?"• "+esc(p.area):""}</div></div>
+  </a>`).join("");
+}
+function esc(v){return String(v??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]))}
+loadProperties();
+</script>
 </body>
 </html>
+''', encoding="utf-8")
+
+# ---------------- property detail ----------------
+(root/"public/property.html").write_text(r'''<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Property | MONEYLAND</title>
+<style>
+body{margin:0;background:#09090b;color:#f7f4fa;font-family:Inter,system-ui,Arial}.wrap{width:min(1100px,92%);margin:auto}header{height:70px;border-bottom:1px solid #252129;display:flex;align-items:center;justify-content:space-between}.logo{font-weight:900;font-size:20px}a{color:#c056ff;text-decoration:none}.hero{padding:30px 0}.gallery{display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;height:480px}.gallery img{width:100%;height:100%;object-fit:cover;border-radius:8px;background:#19171b}.gallery img:first-child{grid-row:span 2}.badge{display:inline-block;background:#8e2cdb;border-radius:4px;padding:5px 8px;font-size:10px;font-weight:800;margin-top:25px}.grid{display:grid;grid-template-columns:2fr 1fr;gap:30px;margin-top:25px}.panel{border:1px solid #2a252e;background:#111014;border-radius:9px;padding:20px}.price{font-size:27px;font-weight:900;margin:12px 0}.muted{color:#9c96a1;font-size:12px;line-height:1.7}.contact{display:block;text-align:center;background:#9c35e7;color:white;padding:12px;border-radius:6px;margin-top:15px}@media(max-width:700px){.gallery{height:300px;grid-template-columns:1fr 1fr}.gallery img:first-child{grid-column:span 2;grid-row:auto}.grid{grid-template-columns:1fr}}
+</style></head><body><div class="wrap"><header><a class="logo" href="/">◆ MONEYLAND</a><a href="/">← All Properties</a></header><main class="hero" id="app"></main></div>
+<script>
+(async()=>{const id=new URLSearchParams(location.search).get("id");const r=await fetch("/api/properties/"+encodeURIComponent(id));const p=await r.json();if(!r.ok){document.getElementById("app").innerHTML="<h2>Property not found</h2>";return}
+const imgs=(p.images||[]).slice(0,10);document.getElementById("app").innerHTML=`
+<div class="gallery">${imgs.map(x=>`<img src="${x.url}" alt="">`).join("")}</div>
+<span class="badge">${esc(p.dealType)}</span><div class="grid"><div class="panel"><h1>${esc(p.title)}</h1><div class="muted">${esc(p.location)}, ${esc(p.city)}</div><div class="price">${esc(p.price)}</div><p class="muted">${esc(p.description)}</p><p class="muted">${esc(p.propertyType)} ${p.bhk?"• "+esc(p.bhk):""} ${p.area?"• "+esc(p.area):""} ${p.bathrooms?"• "+esc(p.bathrooms)+" Bath":""}</p></div><div class="panel"><h3>Interested?</h3><p class="muted">Contact details can be connected to your lead/CRM system in the next module.</p><a class="contact" href="/#contact">Contact MONEYLAND</a></div></div>`;
+function esc(v){return String(v??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]))}})();
+</script></body></html>
+''', encoding="utf-8")
+
+# ---------------- admin ----------------
+(root/"public/admin/index.html").write_text(r'''<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MONEYLAND Admin</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#09090b;color:#f5f2f8;font-family:Inter,system-ui,Arial}.wrap{width:min(1180px,94%);margin:auto}header{height:70px;border-bottom:1px solid #27222c;display:flex;align-items:center;justify-content:space-between}.logo{font-size:20px;font-weight:900}button{cursor:pointer}.topbtn{background:#161219;border:1px solid #50305e;color:#eee;border-radius:6px;padding:8px 12px}.login{width:min(400px,100%);margin:100px auto;background:#121015;border:1px solid #2e2834;border-radius:10px;padding:25px}.login h1{margin-top:0}.field{margin:13px 0}.field label{display:block;font-size:11px;color:#aaa3af;margin-bottom:6px}.field input,.field select,.field textarea{width:100%;background:#0b0a0d;border:1px solid #3a323f;color:#fff;border-radius:6px;padding:11px}.field textarea{min-height:100px;resize:vertical}.primary{width:100%;border:0;background:#9835e4;color:#fff;padding:12px;border-radius:6px;font-weight:800}.msg{font-size:11px;color:#d79bf6;margin-top:10px}.dash{padding:28px 0}.layout{display:grid;grid-template-columns:350px 1fr;gap:20px}.panel{background:#111014;border:1px solid #2b2630;border-radius:9px;padding:18px}.panel h2{font-size:17px;margin-top:0}.deal-buttons{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:15px}.deal-buttons button{padding:9px 4px;border:1px solid #49334f;background:#171219;color:#bbb2c0;border-radius:6px;font-size:10px}.deal-buttons button.active{background:#9432db;color:#fff;border-color:#ae48ef}.drop{border:1px dashed #57445e;padding:17px;text-align:center;border-radius:7px;color:#aaa3af;font-size:11px}.preview{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-top:8px}.preview img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:4px}.property-row{display:grid;grid-template-columns:70px 1fr auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid #242028}.thumb{width:70px;height:55px;object-fit:cover;border-radius:5px;background:#222}.row-title{font-size:12px;font-weight:800}.row-meta{font-size:9px;color:#99919e;margin-top:4px}.status{font-size:9px;color:#c45cff}.actions{display:flex;gap:5px;flex-wrap:wrap}.small{padding:6px 8px;border:1px solid #49304f;background:#171117;color:#ddd;border-radius:5px;font-size:9px}.danger{border-color:#71323c}.hidden{display:none}@media(max-width:850px){.layout{grid-template-columns:1fr}}
+</style></head><body>
+<header><div class="wrap" style="display:flex;justify-content:space-between;width:94%"><div class="logo">◆ MONEYLAND ADMIN</div><div><a href="/" class="topbtn">Main Website</a> <button class="topbtn" onclick="logout()">Logout</button></div></div></header>
+
+<div class="wrap">
+<div id="login" class="login">
+<h1>Admin Login</h1><p style="color:#999;font-size:11px">Only authorised MONEYLAND staff should access this portal.</p>
+<div class="field"><label>Username</label><input id="user" value="admin"></div>
+<div class="field"><label>Password</label><input id="pass" type="password"></div>
+<button class="primary" onclick="login()">Login</button><div class="msg" id="loginMsg"></div>
+</div>
+
+<div id="dashboard" class="dash hidden">
+<div class="layout">
+<div class="panel"><h2>Add Property</h2>
+<div class="deal-buttons" id="deal"><button data-v="Fresh Booking" class="active">Fresh Booking</button><button data-v="Resale">Resale</button><button data-v="Rental">Rental</button></div>
+<form id="form" enctype="multipart/form-data">
+<input type="hidden" id="dealType" name="dealType" value="Fresh Booking">
+<div class="field"><label>Property Title *</label><input name="title" required placeholder="3 BHK Premium Apartment"></div>
+<div class="field"><label>Property Type</label><select name="propertyType"><option>Residential</option><option>Commercial</option><option>Plot</option><option>Villa</option><option>Farm</option><option>Office</option></select></div>
+<div class="field"><label>City *</label><input name="city" value="Gurgaon" required></div>
+<div class="field"><label>Location / Sector</label><input name="location" placeholder="Sector 84, Gurgaon"></div>
+<div class="field"><label>Price *</label><input name="price" required placeholder="₹1.85 Cr"></div>
+<div class="field"><label>Area</label><input name="area" placeholder="1850 Sq.ft"></div>
+<div class="field"><label>BHK</label><input name="bhk" placeholder="3 BHK"></div>
+<div class="field"><label>Bathrooms</label><input name="bathrooms" placeholder="3"></div>
+<div class="field"><label>Possession</label><input name="possession" placeholder="Ready to Move"></div>
+<div class="field"><label>Description</label><textarea name="description"></textarea></div>
+<div class="field"><label>Up to 10 property images</label><div class="drop">Choose up to 10 JPG / PNG / WEBP images<input style="margin-top:10px" id="images" name="images" type="file" accept="image/jpeg,image/png,image/webp" multiple></div><div class="preview" id="preview"></div></div>
+<button class="primary" type="submit">Publish Property</button><div class="msg" id="formMsg"></div>
+</form>
+</div>
+
+<div class="panel"><h2>Properties</h2><div id="list"></div></div>
+</div>
+</div></div>
+
+<script>
+const $=id=>document.getElementById(id);
+document.querySelectorAll("#deal button").forEach(b=>b.onclick=()=>{document.querySelectorAll("#deal button").forEach(x=>x.classList.remove("active"));b.classList.add("active");$("dealType").value=b.dataset.v});
+$("images").onchange=()=>{$("preview").innerHTML="";[...$("images").files].slice(0,10).forEach(f=>{const img=document.createElement("img");img.src=URL.createObjectURL(f);$("preview").appendChild(img)})};
+
+async function check(){const r=await fetch("/api/admin/me");const d=await r.json();$("login").classList.toggle("hidden",d.admin);$("dashboard").classList.toggle("hidden",!d.admin);if(d.admin)loadList()}
+async function login(){const r=await fetch("/api/admin/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:$("user").value,password:$("pass").value})});const d=await r.json();if(!r.ok){$("loginMsg").textContent=d.message;return}check()}
+async function logout(){await fetch("/api/admin/logout",{method:"POST"});location.reload()}
+$("form").onsubmit=async e=>{e.preventDefault();if($("images").files.length>10){$("formMsg").textContent="Maximum 10 images allowed.";return}const r=await fetch("/api/admin/properties",{method:"POST",body:new FormData($("form"))});const d=await r.json();$("formMsg").textContent=d.message||"Property published successfully.";if(r.ok){$("form").reset();$("dealType").value="Fresh Booking";$("preview").innerHTML="";document.querySelectorAll("#deal button").forEach((x,i)=>x.classList.toggle("active",i===0));loadList()}};
+async function loadList(){const r=await fetch("/api/admin/properties");const data=await r.json();$("list").innerHTML=data.length?data.map(p=>`<div class="property-row"><img class="thumb" src="${p.images?.[0]?.url||""}"><div><div class="row-title">${esc(p.title)}</div><div class="row-meta">${esc(p.dealType)} • ${esc(p.city)} • ${esc(p.price)}</div><div class="status">${esc(p.status)}</div></div><div class="actions"><button class="small" onclick="setStatus('${p.id}','published')">Publish</button><button class="small" onclick="setStatus('${p.id}','draft')">Draft</button><button class="small danger" onclick="removeP('${p.id}')">Delete</button></div></div>`).join(""):"<p style='color:#888;font-size:11px'>No properties yet.</p>"}
+async function setStatus(id,status){await fetch("/api/admin/properties/"+id+"/status",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({status})});loadList()}
+async function removeP(id){if(!confirm("Delete this property and its images?"))return;await fetch("/api/admin/properties/"+id,{method:"DELETE"});loadList()}
+function esc(v){return String(v??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]))}
+check();
+</script></body></html>
+''', encoding="utf-8")
+
+# ---------------- README ----------------
+(root/"README.md").write_text(r'''# MONEYLAND Portal — V1
+
+This version implements the core workflow requested:
+
+ADMIN PORTAL
+→ choose Fresh Booking / Resale / Rental
+→ enter property details
+→ upload up to 10 images
+→ Publish
+→ property immediately becomes available on the main website API
+
+PUBLIC WEBSITE
+→ simple large hero
+→ Fresh Booking / Resale / Rental selector
+→ search
+→ latest property cards
+→ property detail page
+→ About / Team / Careers / Contact sections
+
+## Run locally
+
+1. Install Node.js.
+2. Open terminal in this folder.
+3. Run:
+
+```bash
+npm install
+node server.js
