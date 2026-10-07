@@ -1,2 +1,2 @@
 /* Replace these with your Supabase project values before deployment. Never put a service_role key in browser code. */
-window.SUPABASE_CONFIG={url:'https://xkxoerpxhueshzzckcrb.supabase.co',anonKey:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhreG9lcnB4aHVlc2h6emNrY3JiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1MjM2NTQsImV4cCI6MjA5NTA5OTY1NH0.uYCEJOkTrASG62TSJy4AcOkTFX2epk3I5HRd1USm4Dc'};
+window.SUPABASE_CONFIG={url:'https://YOUR-PROJECT.supabase.co',anonKey:'YOUR_SUPABASE_ANON_KEY'};
