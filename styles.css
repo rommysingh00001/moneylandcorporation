@@ -38,3 +38,79 @@ button:active,a:active,.project-card:active,.listing-card:active,.info-card:acti
 @media(max-width:900px){.nav-login{display:block}.project-gallery{grid-template-columns:1fr 1fr;grid-template-rows:260px 180px}.project-gallery img:first-child{grid-column:1/3;grid-row:auto}.brokerage-highlight{display:block}.brokerage-highlight .btn{margin-top:18px}}
 @media(max-width:580px){.brand-logo{width:165px;height:48px}.nav{padding:0 4vw}.nav-login{font-size:11px;padding:9px 11px}.brokerage-highlight{padding:24px}.brokerage-highlight h2{font-size:32px}.floating-wa{right:14px;bottom:14px;padding:10px 13px}.floating-wa b{font-size:12px}.project-gallery{grid-template-columns:1fr 1fr;grid-template-rows:220px 140px}.project-gallery img:first-child{grid-column:1/3}.map-wrap{height:520px}}
 .project-detail-page{display:block}.project-detail-page .detail-copy{padding:8px 0}.project-detail-page .lead{margin-left:0}.project-detail-page .facts{margin-top:24px}
+
+/* v6 visual polish: deeper black, darker purple, clearer logo, spacing and mobile-first sizing */
+:root{
+  --bg:#020203;
+  --panel:#07070a;
+  --panel2:#0b0b10;
+  --text:#ffffff;
+  --muted:#a5a0b0;
+  --line:rgba(255,255,255,.11);
+  --accent:#6f43c6;
+  --accent2:#4b268e;
+  --shadow:0 28px 80px rgba(0,0,0,.58)
+}
+html,body{background:#020203}
+body{background:radial-gradient(circle at 80% -10%,rgba(83,45,150,.16),transparent 30%),#020203}
+.nav{background:rgba(2,2,3,.94);border-bottom-color:rgba(255,255,255,.10);padding:0 clamp(16px,4vw,56px);min-height:78px}
+.brand-logo{width:170px;height:56px;display:flex;align-items:center;overflow:hidden;flex:0 0 auto}
+.brand-logo img{width:100%;height:100%;object-fit:contain;object-position:left center}
+.nav-login{background:linear-gradient(135deg,#6b3fb9,#42217e);padding:11px 16px;border-radius:12px;white-space:nowrap}
+nav{gap:20px}
+.hero{background:linear-gradient(180deg,#020203 0%,#040407 100%)}
+.hero:before{background:radial-gradient(circle,rgba(79,40,145,.16),transparent 65%)}
+.eyebrow{color:#8d63d0}
+.btn,.nav-cta,.wa{background:linear-gradient(135deg,#6840b5,#452582);box-shadow:0 10px 28px rgba(62,31,120,.28)}
+.secondary{background:#08080c;border-color:rgba(255,255,255,.13)}
+.search-shell{background:#07070a;border-color:rgba(112,69,190,.30);gap:10px;padding:12px}
+.input,.select,textarea{background:#050507;border-color:rgba(255,255,255,.14);min-height:50px;font-size:14px}
+.select{padding-right:38px}
+.select:focus{position:relative;z-index:60}
+.select option{background:#050507;color:#fff;padding:9px}
+.project-card,.listing-card,.panel,.info-card{background:linear-gradient(180deg,#09090d,#040406);border-color:rgba(255,255,255,.10)}
+.project-card:hover,.listing-card:hover,.info-card:hover{border-color:rgba(111,67,198,.55);box-shadow:0 22px 60px rgba(50,25,100,.22)}
+.project-gallery img{border-color:rgba(255,255,255,.10)}
+footer{background:#020203;border-top-color:rgba(255,255,255,.10)}
+.footer-grid{gap:42px}
+.footer-grid .brand-logo{width:170px;height:56px}
+.floating-wa{background:#07070a;border-color:rgba(255,255,255,.82)}
+.floating-wa span{background:#6840b5}
+.section-head{margin-bottom:30px}
+section{padding:82px 0}
+.grid{gap:22px}
+.feature-grid{gap:18px}
+
+@media(max-width:900px){
+  .nav{min-height:74px}
+  .brand-logo{width:145px;height:52px}
+  .nav-login{display:block;font-size:12px;padding:10px 12px}
+  .hero{padding:58px 0 82px}
+  .hero h1{font-size:clamp(38px,9vw,52px);line-height:1.02}
+  .search-shell{margin-top:26px;gap:10px}
+  .grid{grid-template-columns:1fr 1fr;gap:16px}
+  .project-card>img{height:205px}
+  .project-body{padding:18px}
+  .section-head{margin-bottom:24px}
+}
+@media(max-width:580px){
+  .container{width:calc(100% - 28px)}
+  .nav{padding:0 14px;gap:8px}
+  .brand-logo{width:132px;height:50px}
+  .nav-login{font-size:11px;padding:9px 10px}
+  .menu{font-size:23px;margin-left:0}
+  .hero{min-height:auto;padding:48px 0 64px}
+  .hero h1{font-size:40px;letter-spacing:-2px;margin:14px 0 18px}
+  .lead{font-size:15px;line-height:1.55}
+  .search-shell{padding:10px;border-radius:16px}
+  .input,.select,textarea{min-height:52px;padding:14px 13px}
+  section{padding:62px 0}
+  .section-head h2{font-size:30px}
+  .grid,.feature-grid,.form-grid{grid-template-columns:1fr;gap:16px}
+  .project-card>img{height:215px}
+  .project-body h3{font-size:20px}
+  .mini-stats{gap:8px}
+  .footer-grid .brand-logo{width:150px;height:54px}
+  .footer-grid{gap:28px}
+  .floating-wa{right:12px;bottom:12px;padding:9px 12px}
+}
