@@ -39,3 +39,15 @@ For live production:
 
 ## Deployment
 You can host the static files on GitHub Pages, Vercel static hosting or any web server. For the full live version, connect the Supabase project and implement the server-side verification/payment functions described above.
+
+
+## Latest portal changes
+- Location master is intentionally separate from the project directory. The location selector contains sectors, roads, colonies and village/locality names; project names are not mixed into it.
+- Property posting is category-aware. The UI changes fields according to flat, builder floor, villa, plot, agriculture, farmhouse, retail, showroom, office, industrial, warehouse and rental categories.
+- Global navigation includes Home plus Login / Register.
+- Homepage positioning uses: “Gurgaon Ki 1 Property · 1 Owner · 1 Public List” with a small vision statement about verified, transparent listings.
+- Project records now have separate metadata for land parcel, towers/blocks, building height, sizes and tentative pricing. Any missing live fact is deliberately marked for verification instead of being invented.
+- Supabase blueprint includes a projects table and JSON property_details field so admin can maintain type-specific information.
+
+## Data accuracy note
+This package does not scrape or copy Google/99acres/MCG proprietary databases. Live project inventories, prices, tower counts and GIS boundaries must be verified against official builder/RERA/municipal sources before publication. The frontend is designed so those verified records can be stored in Supabase and fetched dynamically.

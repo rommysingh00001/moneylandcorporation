@@ -31,6 +31,25 @@ create table if not exists public.locations(
  created_at timestamptz not null default now()
 );
 
+create table if not exists public.projects(
+ id uuid primary key default gen_random_uuid(),
+ name text not null unique,
+ developer text,
+ category text,
+ location_id uuid references public.locations(id),
+ location_text text not null,
+ total_land_size text,
+ total_towers text,
+ building_height text,
+ unit_sizes text,
+ tentative_costing text,
+ brief text,
+ hero_image_path text,
+ is_active boolean not null default true,
+ is_featured boolean not null default false,
+ created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+);
+
 create table if not exists public.properties(
  id uuid primary key default gen_random_uuid(),
  owner_id uuid not null references public.profiles(id),
@@ -143,6 +162,7 @@ where status in ('pending_verification','verified');
 
 alter table public.profiles enable row level security;
 alter table public.locations enable row level security;
+alter table public.projects enable row level security;
 alter table public.properties enable row level security;
 alter table public.property_media enable row level security;
 alter table public.inquiries enable row level security;
@@ -152,9 +172,10 @@ alter table public.hero_slides enable row level security;
 alter table public.builder_partners enable row level security;
 alter table public.branding_assets enable row level security;
 
--- Public can read active locations, verified properties, active hero slides, branding and partners.
+-- Public can read active locations, active projects, verified properties, active hero slides, branding and partners.
 create policy "public read active branding" on public.branding_assets for select using(is_active=true);
 create policy "public read active locations" on public.locations for select using(is_active=true);
+create policy "public read active projects" on public.projects for select using(is_active=true);
 create policy "public read verified properties" on public.properties for select using(status='verified');
 create policy "public read public media" on public.property_media for select using(is_public=true);
 create policy "public read active heroes" on public.hero_slides for select using(is_active=true);
