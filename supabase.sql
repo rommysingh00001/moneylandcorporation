@@ -1,172 +1,183 @@
--- MONEYLAND VERIFIED — SUPABASE SCHEMA
--- Run this entire file in Supabase SQL Editor.
--- Never store raw Aadhaar numbers. Production Aadhaar authentication must be handled by a compliant identity provider.
-
+-- Moneyland Corporation production database blueprint
+-- Run in Supabase SQL editor, then configure Storage buckets and Supabase Auth.
 create extension if not exists pgcrypto;
 
-create type public.user_role as enum ('buyer','owner','admin');
-create type public.property_status as enum ('draft','pending_verification','field_verification','approved','live','rejected','sold','rented');
-create type public.deal_type as enum ('sale','rent','lease');
-create type public.property_category as enum ('flat_apartment','builder_floor','independent_floor','villa','plot','commercial_shop','office_space','warehouse','showroom','industrial_property','independent_house','farm_house');
-create type public.bid_status as enum ('pending','approved','rejected','withdrawn');
-create type public.media_type as enum ('document','photo','video');
+create type public.property_status as enum ('draft','pending_verification','verified','rejected','sold','rented','archived');
+create type public.property_category as enum ('Residential Flat','Luxury Floor / Builder Floor','Villa','Plot / Residential Land','Retail Shop','Showroom','Food Court','Office Space','Industrial Land','Agricultural Land','Farmhouse','Warehouse','PG / Rental','Commercial Property','Other');
+create type public.bid_type as enum ('rent','buy');
+create type public.bid_status as enum ('pending','approved','rejected','withdrawn','accepted');
 
-create table if not exists public.profiles (
-  id uuid primary key references auth.users(id) on delete cascade,
-  full_name text,
-  phone text unique,
-  role public.user_role not null default 'buyer',
-  is_identity_verified boolean not null default false,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+create table if not exists public.profiles(
+ id uuid primary key references auth.users(id) on delete cascade,
+ full_name text,
+ phone text,
+ role text not null default 'buyer' check(role in ('buyer','owner','admin')),
+ verification_status text not null default 'unverified' check(verification_status in ('unverified','pending','verified','rejected')),
+ verification_provider text,
+ verification_reference text,
+ verification_last4 text,
+ created_at timestamptz not null default now(), updated_at timestamptz not null default now()
 );
 
-create table if not exists public.properties (
-  id uuid primary key default gen_random_uuid(),
-  owner_id uuid not null references public.profiles(id) on delete restrict,
-  title text not null,
-  category public.property_category not null,
-  deal_type public.deal_type not null default 'sale',
-  sector text not null,
-  locality text,
-  society_name text,
-  tower_block text,
-  floor text,
-  unit_no text,
-  bhk text,
-  size_sqft numeric,
-  plot_size_sqyd numeric,
-  demand numeric not null,
-  complete_address text not null,
-  description text,
-  rera_no text,
-  owner_name_as_document text not null,
-  property_record_name text,
-  jamabandi_name text,
-  owner_name_match boolean not null default false,
-  document_match boolean not null default false,
-  field_verified boolean not null default false,
-  admin_approved boolean not null default false,
-  status public.property_status not null default 'pending_verification',
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+create table if not exists public.locations(
+ id uuid primary key default gen_random_uuid(),
+ name text not null unique,
+ kind text not null default 'locality',
+ parent_name text,
+ latitude double precision,
+ longitude double precision,
+ description text,
+ is_active boolean not null default true,
+ created_at timestamptz not null default now()
 );
 
-create table if not exists public.property_media (
-  id uuid primary key default gen_random_uuid(),
-  property_id uuid not null references public.properties(id) on delete cascade,
-  media_type public.media_type not null,
-  storage_path text not null,
-  sort_order int not null default 0,
-  is_public boolean not null default false,
-  created_at timestamptz not null default now()
+create table if not exists public.properties(
+ id uuid primary key default gen_random_uuid(),
+ owner_id uuid not null references public.profiles(id),
+ title text not null,
+ category public.property_category not null,
+ location_id uuid references public.locations(id),
+ location_text text not null,
+ project_name text,
+ tower_no text,
+ unit_no text,
+ floor_no text,
+ size_text text,
+ demand numeric,
+ bedrooms int,
+ bathrooms int,
+ parking text,
+ facing text,
+ possession_text text,
+ description text,
+ latitude double precision,
+ longitude double precision,
+ status public.property_status not null default 'pending_verification',
+ is_featured boolean not null default false,
+ public_listing_key text unique,
+ verification_notes text,
+ verified_by uuid references public.profiles(id),
+ verified_at timestamptz,
+ created_at timestamptz not null default now(), updated_at timestamptz not null default now()
 );
 
-create table if not exists public.bids (
-  id uuid primary key default gen_random_uuid(),
-  property_id uuid not null references public.properties(id) on delete cascade,
-  buyer_id uuid not null references public.profiles(id) on delete restrict,
-  amount numeric not null,
-  message text,
-  status public.bid_status not null default 'pending',
-  owner_response text,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+create table if not exists public.property_media(
+ id uuid primary key default gen_random_uuid(),
+ property_id uuid not null references public.properties(id) on delete cascade,
+ storage_path text not null,
+ media_type text not null check(media_type in ('image','video','document')),
+ sort_order int not null default 0,
+ is_public boolean not null default false,
+ created_at timestamptz not null default now()
 );
 
-create table if not exists public.field_verifications (
-  id uuid primary key default gen_random_uuid(),
-  property_id uuid not null references public.properties(id) on delete cascade,
-  verifier_name text,
-  remarks text,
-  gps_lat double precision,
-  gps_lng double precision,
-  verified_at timestamptz,
-  created_at timestamptz not null default now()
+create table if not exists public.inquiries(
+ id uuid primary key default gen_random_uuid(),
+ property_id uuid references public.properties(id),
+ user_id uuid references public.profiles(id),
+ name text,
+ phone text,
+ message text,
+ source text default 'website',
+ created_at timestamptz not null default now()
 );
 
-create table if not exists public.audit_logs (
-  id uuid primary key default gen_random_uuid(),
-  actor_id uuid references public.profiles(id) on delete set null,
-  property_id uuid references public.properties(id) on delete set null,
-  action text not null,
-  details jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now()
+create table if not exists public.bids(
+ id uuid primary key default gen_random_uuid(),
+ property_id uuid not null references public.properties(id),
+ bidder_id uuid not null references public.profiles(id),
+ bid_type public.bid_type not null,
+ offer_amount numeric not null,
+ security_deposit numeric not null,
+ deposit_payment_id text,
+ status public.bid_status not null default 'pending',
+ owner_note text,
+ created_at timestamptz not null default now(), updated_at timestamptz not null default now()
 );
 
-create or replace function public.is_admin()
-returns boolean language sql security definer set search_path = public
-as $$ select exists(select 1 from public.profiles p where p.id=auth.uid() and p.role='admin'); $$;
+create table if not exists public.subscriptions(
+ id uuid primary key default gen_random_uuid(),
+ user_id uuid not null references public.profiles(id),
+ plan_name text not null default 'Lifetime Brokerage-Free',
+ amount numeric not null default 100000,
+ payment_id text,
+ status text not null default 'pending' check(status in ('pending','active','expired','refunded','cancelled')),
+ starts_at timestamptz,
+ ends_at timestamptz,
+ created_at timestamptz not null default now()
+);
 
-create or replace function public.handle_new_user()
-returns trigger language plpgsql security definer set search_path = public
-as $$ begin insert into public.profiles(id, full_name) values(new.id, coalesce(new.raw_user_meta_data->>'full_name','')) on conflict(id) do nothing; return new; end; $$;
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created after insert on auth.users for each row execute procedure public.handle_new_user();
+create table if not exists public.hero_slides(
+ id uuid primary key default gen_random_uuid(),
+ title text not null,
+ subtitle text,
+ image_path text,
+ property_id uuid references public.properties(id),
+ sort_order int not null default 0,
+ is_active boolean not null default true,
+ created_at timestamptz not null default now()
+);
 
-create or replace function public.set_updated_at() returns trigger language plpgsql as $$ begin new.updated_at=now(); return new; end; $$;
-drop trigger if exists profiles_updated_at on public.profiles; create trigger profiles_updated_at before update on public.profiles for each row execute procedure public.set_updated_at();
-drop trigger if exists properties_updated_at on public.properties; create trigger properties_updated_at before update on public.properties for each row execute procedure public.set_updated_at();
-drop trigger if exists bids_updated_at on public.bids; create trigger bids_updated_at before update on public.bids for each row execute procedure public.set_updated_at();
+create table if not exists public.branding_assets(
+ id uuid primary key default gen_random_uuid(),
+ name text not null unique,
+ storage_path text not null,
+ is_active boolean not null default true,
+ created_at timestamptz not null default now()
+);
+
+create table if not exists public.builder_partners(
+ id uuid primary key default gen_random_uuid(),
+ name text not null unique,
+ logo_path text,
+ website text,
+ note text,
+ is_active boolean not null default true,
+ sort_order int not null default 0
+);
+
+-- Prevent duplicate public listings for the same property identity once verified.
+create unique index if not exists one_verified_public_listing_per_property
+on public.properties(owner_id, lower(coalesce(project_name,'')), lower(coalesce(unit_no,'')), lower(location_text))
+where status in ('pending_verification','verified');
 
 alter table public.profiles enable row level security;
+alter table public.locations enable row level security;
 alter table public.properties enable row level security;
 alter table public.property_media enable row level security;
+alter table public.inquiries enable row level security;
 alter table public.bids enable row level security;
-alter table public.field_verifications enable row level security;
-alter table public.audit_logs enable row level security;
+alter table public.subscriptions enable row level security;
+alter table public.hero_slides enable row level security;
+alter table public.builder_partners enable row level security;
+alter table public.branding_assets enable row level security;
 
--- Profiles: user sees own profile; admin sees all.
-drop policy if exists profiles_select on public.profiles;
-create policy profiles_select on public.profiles for select using (id=auth.uid() or public.is_admin());
-drop policy if exists profiles_update on public.profiles;
-create policy profiles_update on public.profiles for update using (id=auth.uid() or public.is_admin());
+-- Public can read active locations, verified properties, active hero slides, branding and partners.
+create policy "public read active branding" on public.branding_assets for select using(is_active=true);
+create policy "public read active locations" on public.locations for select using(is_active=true);
+create policy "public read verified properties" on public.properties for select using(status='verified');
+create policy "public read public media" on public.property_media for select using(is_public=true);
+create policy "public read active heroes" on public.hero_slides for select using(is_active=true);
+create policy "public read active partners" on public.builder_partners for select using(is_active=true);
 
--- Public can see only approved/live listings. Owners/admins can see their own / all respectively.
-drop policy if exists properties_public_select on public.properties;
-create policy properties_public_select on public.properties for select using (status='live' or owner_id=auth.uid() or public.is_admin());
-drop policy if exists properties_owner_insert on public.properties;
-create policy properties_owner_insert on public.properties for insert with check (owner_id=auth.uid());
-drop policy if exists properties_owner_update on public.properties;
-create policy properties_owner_update on public.properties for update using (owner_id=auth.uid() or public.is_admin()) with check (owner_id=auth.uid() or public.is_admin());
-drop policy if exists properties_admin_delete on public.properties;
-create policy properties_admin_delete on public.properties for delete using (public.is_admin());
+-- Signed-in users may manage their own profile and create submissions/inquiries/bids.
+create policy "profile self" on public.profiles for all using(auth.uid()=id) with check(auth.uid()=id);
+create policy "owner creates property" on public.properties for insert with check(owner_id=auth.uid());
+create policy "owner reads own property" on public.properties for select using(owner_id=auth.uid() or status='verified');
+create policy "owner updates own unverified property" on public.properties for update using(owner_id=auth.uid() and status in ('draft','pending_verification')) with check(owner_id=auth.uid());
+create policy "user creates inquiry" on public.inquiries for insert with check(user_id=auth.uid() or user_id is null);
+create policy "user creates bid" on public.bids for insert with check(bidder_id=auth.uid());
+create policy "bidder reads own bid" on public.bids for select using(bidder_id=auth.uid());
+create policy "user reads own subscription" on public.subscriptions for select using(user_id=auth.uid());
 
--- Media: public sees only public media attached to live property; owner/admin can see private media.
-drop policy if exists media_select on public.property_media;
-create policy media_select on public.property_media for select using (
-  is_public and exists(select 1 from public.properties p where p.id=property_id and p.status='live')
-  or exists(select 1 from public.properties p where p.id=property_id and p.owner_id=auth.uid())
-  or public.is_admin()
-);
-drop policy if exists media_insert on public.property_media;
-create policy media_insert on public.property_media for insert with check (exists(select 1 from public.properties p where p.id=property_id and (p.owner_id=auth.uid() or public.is_admin())));
-drop policy if exists media_delete on public.property_media;
-create policy media_delete on public.property_media for delete using (exists(select 1 from public.properties p where p.id=property_id and (p.owner_id=auth.uid() or public.is_admin())));
+-- Admin policies should be implemented using a server-side role claim / admin table or Supabase custom claims.
+-- Do not make admin privileges public in browser code.
 
--- Bids: buyer creates; buyer sees own; property owner sees bids on own property; admin sees all.
-drop policy if exists bids_select on public.bids;
-create policy bids_select on public.bids for select using (buyer_id=auth.uid() or exists(select 1 from public.properties p where p.id=property_id and p.owner_id=auth.uid()) or public.is_admin());
-drop policy if exists bids_insert on public.bids;
-create policy bids_insert on public.bids for insert with check (buyer_id=auth.uid() and exists(select 1 from public.properties p where p.id=property_id and p.status='live'));
-drop policy if exists bids_update on public.bids;
-create policy bids_update on public.bids for update using (buyer_id=auth.uid() or exists(select 1 from public.properties p where p.id=property_id and p.owner_id=auth.uid()) or public.is_admin()) with check (buyer_id=auth.uid() or exists(select 1 from public.properties p where p.id=property_id and p.owner_id=auth.uid()) or public.is_admin());
+-- Storage buckets (create through Dashboard if these statements are unavailable in your project):
+-- property-media (private by default)
+-- property-documents (private)
+-- branding (public read, admin write)
+-- project-media (public read, admin write)
 
--- Field verification and audit logs are admin-controlled.
-drop policy if exists field_admin on public.field_verifications;
-create policy field_admin on public.field_verifications for all using (public.is_admin()) with check (public.is_admin());
-drop policy if exists audit_admin on public.audit_logs;
-create policy audit_admin on public.audit_logs for all using (public.is_admin()) with check (public.is_admin());
-
--- Storage buckets. Property documents should remain private; photos/videos may be public only after approval.
-insert into storage.buckets(id,name,public) values ('property-documents','property-documents',false) on conflict(id) do nothing;
-insert into storage.buckets(id,name,public) values ('property-media','property-media',false) on conflict(id) do nothing;
-
--- These storage policies assume paths begin with the authenticated user's UUID.
-drop policy if exists property_docs_owner on storage.objects;
-create policy property_docs_owner on storage.objects for all to authenticated using (bucket_id='property-documents' and (owner=auth.uid() or public.is_admin())) with check (bucket_id='property-documents' and (owner=auth.uid() or public.is_admin()));
-drop policy if exists property_media_owner on storage.objects;
-create policy property_media_owner on storage.objects for all to authenticated using (bucket_id='property-media' and (owner=auth.uid() or public.is_admin())) with check (bucket_id='property-media' and (owner=auth.uid() or public.is_admin()));
-
--- IMPORTANT: The portal never exposes owner phone/email in public property data.
--- WhatsApp contact remains the Moneyland number: +91 8178593108.
+insert into public.builder_partners(name,sort_order) values
+('DLF','1'),('M3M','2'),('Emaar India','3'),('Godrej Properties','4'),('Signature Global','5'),('Smartworld Developers','6'),('Whiteland Corporation','7'),('Elan Group','8'),('Tulip Infratech','9'),('AIPL','10'),('BPTP','11'),('ATS Infrastructure','12'),('Hero Realty','13'),('Ashiana Housing','14'),('Conscient','15'),('Spaze Group','16'),('Paras Buildtech','17'),('Pioneer Urban','18'),('ROF Group','19'),('Suncity Projects','20'),('Bestech Group','21'),('Reach Group','22'),('Ireo','23') on conflict(name) do nothing;

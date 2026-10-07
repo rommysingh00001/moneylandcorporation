@@ -1,40 +1,41 @@
-# Moneyland Corporation – Premium Gurgaon Property Portal
+# Moneyland Corporation — Gurgaon Verified Property Portal
 
-Tagline used across the website: **Gurgaon Ki Har Property, Sirf Ek Baar, Malik Se Direct**
+This ZIP is a static HTML/CSS/JS front-end plus a production-oriented Supabase SQL blueprint.
 
-## Implemented in this build
-- Full name **Moneyland Corporation** used throughout public UI.
-- Premium dark/glass visual system with stronger mobile design, ambient bottom glow, hover depth, responsive navigation and fixed mobile bottom navigation.
-- New local SVG logo: `assets/moneyland-corporation-logo.svg`.
-- About page with the core vision:
-  - one property = one public listing,
-  - owner + Moneyland Corporation verification,
-  - fewer listings but more genuine listings,
-  - eligible buyer can bid directly on a verified owner listing after the required token/approval flow.
-- Career page with direct resume email to `rrahmawat@gmail.com`.
-- Gurgaon location directory expanded across sectors/localities.
-- Gurgaon project directory expanded to **122 project entries** from major developer/project names represented in the frontend dataset.
-- Dynamic project detail page based on the selected project URL.
-- Builder floor vs flat/apartment property type is stored separately so an official image can be attached to the correct project/property type later.
-- Public owner resale listings remain approval-gated.
-- Bid gate remains: minimum token ₹50,000 for sale and ₹5,000 for rent, with admin approval required.
-- Aadhaar login remains removed; Aadhaar is requested only in the owner listing verification workflow.
+## Included
+- Gurgaon-first search directory with sectors 1–115 and a broad seed of roads, colonies, corridors and project/locality names.
+- Zoomable OpenStreetMap/Leaflet map.
+- Structured property-posting form covering flats, luxury/builder floors, villas, plots, retail, showrooms, food courts, offices, industrial land, agricultural land, farmhouses, warehouses, rental/PG and commercial assets.
+- Owner verification queue and admin approval UI.
+- Public verified-listing concept: one public listing per property identity.
+- WhatsApp enquiry CTA throughout the site.
+- Bid flow messaging: ₹5,000 refundable rental security deposit; ₹50,000 refundable purchase security deposit.
+- ₹1,00,000 lifetime brokerage-free plan page; otherwise stated 1% brokerage subject to final agreed terms.
+- About / vision / Career / Contact pages.
+- Admin CMS structure for hero slides, listings, locations, partners and media.
+- Supabase schema with profiles, properties, media, inquiries, bids, subscriptions, hero slides, locations and builder partners, plus RLS starter policies.
 
-## Important source-verification rule
-This environment does not provide live Google/web browsing for this build. Because the user explicitly requested **original/non-fake project imagery and accurate project facts**, this version intentionally does **not** invent project elevations, land-parcel sizes, tower counts, possession dates, prices or approvals. Project cards therefore show a source-verification placeholder when no verified official image is available.
+## Company details
+Moneyland Corporation
+R1/205, M3M 65th Avenue, Sector 65, Gurgaon, Gurugram, Haryana - 122018
+Phone / WhatsApp: 8178593108
+Email: rrahmawat@gmail.com
+GSTIN: 06CKJPR5013B1ZH
+RERA: RC/HARERA/GGM/4078/3673/2026/113
+Tagline: Gurgaon Ki Har Property, Sirf Ek Baar, Malik Se Direct
 
-Before production publication, each project should be populated from the builder's official website / latest RERA filing with:
-- official project elevation/gallery image,
-- land parcel size,
-- project type,
-- towers / floors where officially published,
-- unit configurations,
-- possession / construction status,
-- RERA registration,
-- current price/inventory,
-- official source URL and source date.
+## Important production/security note
+A pure HTML website cannot safely implement Aadhaar authentication, real ownership verification, payment settlement/refunds, or privileged admin access by itself. This build therefore does NOT store raw Aadhaar numbers in localStorage and does not pretend that browser-side approval is a secure verification system.
 
-This is deliberate: a blank verified field is safer than a fake fact or wrong project image.
+For live production:
+1. Connect Supabase Auth.
+2. Use a compliant identity/Aadhaar verification provider through a server/Edge Function; store only provider reference + minimal verification metadata, not raw Aadhaar in public tables.
+3. Put property documents and private owner media in private Supabase Storage buckets.
+4. Use Supabase RLS + admin custom claims/role table for admin operations.
+5. Connect Razorpay (or another compliant gateway) through server-side order creation and webhook verification for bid deposits/subscription.
+6. Implement automated refund workflow for refundable bid deposits according to the published terms.
+7. Replace seed project images/details with official/licensed builder/RERA sources before publishing as factual project information.
+8. Populate the location CMS with the exact Gurgaon locality/road dataset you want to maintain; no third-party portal's proprietary database is copied.
 
-## Production security note
-The current login, bid approval and owner approval are frontend/demo state using browser localStorage. Do **not** use this implementation as a production Aadhaar/payment/admin system. A production release should use secure server-side authentication, Supabase/Postgres RLS, payment gateway webhooks, encrypted/controlled document storage and server-side admin permissions. Aadhaar should not be stored in browser localStorage or exposed in public HTML.
+## Deployment
+You can host the static files on GitHub Pages, Vercel static hosting or any web server. For the full live version, connect the Supabase project and implement the server-side verification/payment functions described above.
