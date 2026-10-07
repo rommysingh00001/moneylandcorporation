@@ -22,7 +22,7 @@ Phone / WhatsApp: 8178593108
 Email: rrahmawat@gmail.com
 GSTIN: 06CKJPR5013B1ZH
 RERA: RC/HARERA/GGM/4078/3673/2026/113
-Tagline: Gurgaon Ki Har Property, Sirf Ek Baar, Malik Se Direct
+Tagline: Gurgaon Ki 1 Property · 1 Owner · 1 Public List
 
 ## Important production/security note
 A pure HTML website cannot safely implement Aadhaar authentication, real ownership verification, payment settlement/refunds, or privileged admin access by itself. This build therefore does NOT store raw Aadhaar numbers in localStorage and does not pretend that browser-side approval is a secure verification system.
@@ -51,3 +51,13 @@ You can host the static files on GitHub Pages, Vercel static hosting or any web 
 
 ## Data accuracy note
 This package does not scrape or copy Google/99acres/MCG proprietary databases. Live project inventories, prices, tower counts and GIS boundaries must be verified against official builder/RERA/municipal sources before publication. The frontend is designed so those verified records can be stored in Supabase and fetched dynamically.
+
+## Latest update — October 2026
+- Homepage property-type search now carries the selected type/location/search text into the Properties page.
+- Gurgaon Map location selection attempts a precise OpenStreetMap/Nominatim zoom and known Gurgaon locations have direct coordinates.
+- Homepage map has been removed; the map opens from the dedicated Gurgaon Map page.
+- Header top-right CTA is now Login / Register; WhatsApp is a floating button at the bottom-right.
+- Lifetime Brokerage Free (₹1,00,000) is highlighted on the homepage.
+- Project detail pages now show a richer facts panel, gallery area, Google Maps link and Google Search link.
+- Important: this package cannot safely scrape Google Images/Google project pages and present them as official. Current seed images are illustrative unless admin replaces them with verified/licensed project images.
+- Admin entry link: `admin-login.html` → `admin.html`. The static demo is not a secure production admin system; Supabase Auth + RLS must be connected before real admin control is exposed publicly.
