@@ -114,6 +114,3 @@ section{padding:82px 0}
   .footer-grid{gap:28px}
   .floating-wa{right:12px;bottom:12px;padding:9px 12px}
 }
-
-/* v7 account + listing details */
-.nav-account{display:flex;align-items:center;gap:10px}.user-greeting{color:#c8c3d2;font-size:12px;font-weight:700}.listing-media{display:block;min-width:0}.listing-media img{cursor:pointer}.listing-gallery img{cursor:zoom-in}.project-detail-page .detail-copy{padding-bottom:20px}@media(max-width:900px){.nav-account{margin-left:auto;margin-right:8px}.user-greeting{display:none}}
